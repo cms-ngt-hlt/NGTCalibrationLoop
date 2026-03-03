@@ -1,4 +1,4 @@
-# The NGT Demonstator Calibration Leg
+# The NGT Demonstrator Calibration Leg
 
 ## Overview
 This directory implements the calibration leg workflow of our NGT demonstrator. It is designed to run the calibration loop on either of our calibration nodes (`ngtcalfu-c2b05-43-01.cms` and `ngtcalfu-c2b05-44-01.cms`) for the NGT demonstrator, through monitoring ongoing collisions at CMS and rederiving calibrations (for now only EcalPedestals and SiStrip Bad Components) up to the upload to the conditions database of CMS. Each calibration loop is implemented as a finite state machine (FSM) that monitors input data, processes it, and produces the output for the next step:
