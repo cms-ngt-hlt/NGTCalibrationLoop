@@ -674,8 +674,10 @@ rm {self.tempScriptName}
         self.runStartTime = None
         self.waitingLS = False
         self.enoughLS = False
-        calibration_config_path = (
-            f"/tmp/ngt/calibrationYAML/{self.calibration_name}.yaml"
+        calibration_config_path = os.path.join(
+            os.getcwd(),
+            "calibrationYAML",
+            f"{self.calibration_name}.yaml",
         )
         with open(calibration_config_path, "r", encoding="utf-8") as f:
             self.calib_config = yaml.safe_load(f)
@@ -685,7 +687,8 @@ rm {self.tempScriptName}
         self.workingDir = "/dev/null"
         self.preparedFinalLS = False
         # Read some configurations
-        with open("/tmp/ngt/ngtParameters.jsn", "r", encoding="utf-8") as f:
+        config_path = os.path.join(os.getcwd(), "ngtParameters.jsn")
+        with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)
         self.scramArch = config["SCRAM_ARCH"]
         self.cmsswVersion = config["CMSSW_VERSION"]
