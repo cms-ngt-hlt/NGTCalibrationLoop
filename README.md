@@ -61,7 +61,6 @@ git clone ssh://git@gitlab.cern.ch:7999/cmsoms/oms-api-client.git
 cp -r oms-api-client/omsapi .
 mkdir -p /tmp/ngt/
 chmod g+ws /tmp/ngt/
-cp -ru ngtParameters.jsn calibrationYAML/ /tmp/ngt/ 
 python3 NGTLoopStep2.py -c EcalPedestals  # or SiStripBad
 ```
 then quit the tmux session either via keyboard combination or simply closing the terminal. 
@@ -130,7 +129,6 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
 ├── calibrationYAML/
 │   ├── SiStripBad.yaml
 │   └── EcalPedestals.yaml
-├── ngtParameters.jsn
 ├── NGTLoopStep2_ALL.log        # Step 2: All log levels
 ├── NGTLoopStep2_INFO.log       # Step 2: Info only
 ├── NGTLoopStep2_WARNING.log    # Step 2: Warnings only
@@ -180,7 +178,6 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
     └── harvestJob001/                  # Step 4: Updated harvesting
         └── ...
 ```
-
 
 ## Nota Bene
 There are quite a lot of issues remaining, still. The version we are at right now is the "functioning" version that was used for the demonstrator in the 2025 data taking. However, for 2026 data-taking, we plan to improve and have worked on all the issues. 
