@@ -63,7 +63,7 @@ class NGTLoopStep2:
         runNumber = self.runNumber
         logging.info(f"Started processing run {runNumber}!")
         # We live in directory /tmp/ngt.
-        p = Path(f"/tmp/ngt/run{runNumber}")
+        p = Path(f"/tmp/ngt/{self.calibration_name}/run{runNumber}")
         p.mkdir(parents=True, exist_ok=True)
         # os.chmod(p, 0o777)
         self.workingDir = str(p)
@@ -272,14 +272,14 @@ class NGTLoopStep2:
             isRecentRun = int(delta.total_seconds()) < int(
                 self.maxLatchTimeInHours * 60 * 60
             )
-            runDirMissing = not Path(f"/tmp/ngt/run{run_number}").exists()
+            runDirMissing = not Path(f"/tmp/ngt/{self.calibration_name}/run{run_number}").exists()
             # We want a run that
             # 1. (is not running AND is long enough AND has started less than 8 hours ago)
             # OR (2. is still running AND has started less than 8 hours ago)
             if is_running and isRecentRun and runDirMissing:  # Found a live run!
                 logging.info(
                     f"Found running run {run_number},"
-                    f" and no runDir for it /tmp/ngt/run{run_number}"
+                    f" and no runDir for it /tmp/ngt/{self.calibration_name}/run{run_number}"
                 )
                 newRunAvailable = True
                 break
@@ -292,7 +292,7 @@ class NGTLoopStep2:
             if runReadyToBeProcessed and runToBeProcessed:
                 logging.info(
                     f"Found ended run {run_number},"
-                    f" and no runDir for it /tmp/ngt/run{run_number}"
+                    f" and no runDir for it /tmp/ngt/{self.calibration_name}/run{run_number}"
                 )
                 # Found a recent run that is long enough!
                 newRunAvailable = True
@@ -870,7 +870,7 @@ rm {self.tempScriptName}
 
 # --- NEW LOGGING SETUP ---
 # Create /tmp/ngt if it doesn't exist, so we can write the log file
-Path("/tmp/ngt").mkdir(parents=True, exist_ok=True)
+Path(f"/tmp/ngt/{args.calibration}").mkdir(parents=True, exist_ok=True)
 
 # Get the main logger
 logger = logging.getLogger()
@@ -882,20 +882,20 @@ formatter = logging.Formatter(
 )
 
 # 1. ALL MESSAGES - Complete history
-all_handler = logging.FileHandler("/tmp/ngt/NGTLoopStep2_ALL.log")
+all_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep2_ALL.log")
 all_handler.setLevel(logging.DEBUG)
 all_handler.setFormatter(formatter)
 logger.addHandler(all_handler)
 
 # 2. INFO ONLY
-info_handler = logging.FileHandler("/tmp/ngt/NGTLoopStep2_INFO.log")
+info_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep2_INFO.log")
 info_handler.setLevel(logging.INFO)
 info_handler.addFilter(lambda record: record.levelno == logging.INFO)  # ONLY info
 info_handler.setFormatter(formatter)
 logger.addHandler(info_handler)
 
 # 3. WARNING ONLY
-warning_handler = logging.FileHandler("/tmp/ngt/NGTLoopStep2_WARNING.log")
+warning_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep2_WARNING.log")
 warning_handler.setLevel(logging.WARNING)
 warning_handler.addFilter(
     lambda record: record.levelno == logging.WARNING
@@ -904,14 +904,14 @@ warning_handler.setFormatter(formatter)
 logger.addHandler(warning_handler)
 
 # 4. ERROR ONLY
-error_handler = logging.FileHandler("/tmp/ngt/NGTLoopStep2_ERROR.log")
+error_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep2_ERROR.log")
 error_handler.setLevel(logging.ERROR)
 error_handler.addFilter(lambda record: record.levelno == logging.ERROR)  # ONLY errors
 error_handler.setFormatter(formatter)
 logger.addHandler(error_handler)
 
 # 5. CRITICAL ONLY
-critical_handler = logging.FileHandler("/tmp/ngt/NGTLoopStep2_CRITICAL.log")
+critical_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep2_CRITICAL.log")
 critical_handler.setLevel(logging.CRITICAL)
 critical_handler.addFilter(
     lambda record: record.levelno == logging.CRITICAL
