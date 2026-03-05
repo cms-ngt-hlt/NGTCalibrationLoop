@@ -665,10 +665,6 @@ rm {self.tempScriptName}
         self.tempScriptName = ""
         self.startTime = 0
         self.minimumLS = 1  # these variable names are a bit misleading as they are not
-        # minimumLS but minimum files available (same for the other ones ok)
-        self.minLSToProcess = (
-            50  # to avoid the continued processing of runs that do not have enough data
-        )
         self.maximumFilesPerJob = 5
         self.maxLatchTimeInHours = 8  # due to 8 hours of buffering
         self.runStartTime = None
@@ -682,6 +678,14 @@ rm {self.tempScriptName}
         with open(calibration_config_path, "r", encoding="utf-8") as f:
             self.calib_config = yaml.safe_load(f)
         self.file_in_path = self.calib_config.get("file_in_path")
+
+        # minimumLS but minimum files available (same for the other ones ok)
+        args = self.calib_config["step_2_config"]
+        minLS = args["minLsToProcess"]
+        self.minLSToProcess = (
+            minLS   # to avoid the continued processing of runs that do not have enough data
+        )
+
         self.pathWhereFilesAppear = self.file_in_path + self.current_run_str + "/00000"
         logging.info(f"self.pathWhereFilesAppear {self.pathWhereFilesAppear}")
         self.workingDir = "/dev/null"
@@ -718,7 +722,7 @@ rm {self.tempScriptName}
         self.tempScriptName = ""
         self.startTime = 0
         self.minimumLS = 1
-        self.minLSToProcess = 50
+        self.minLSToProcess = 1
         self.maximumFilesPerJob = 5
         self.maxLatchTimeInHours = 8
         self.runStartTime = None
