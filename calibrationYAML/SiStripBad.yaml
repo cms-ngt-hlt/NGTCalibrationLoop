@@ -1,11 +1,12 @@
 calibration_name: "SiStripBad"
 
-file_in_path: "/eos/cms/tier0/store/express/Run2025G/ExpressPhysics/FEVT/Express-v1/000/"
+file_in_path: "/eos/cms/tier0/store/express/Commissioning2026/ExpressCosmics/FEVT/Express-v1/000/"
 
 # --- STEP 2 CONFIG ---
 step_2_config:
-  filltype : "PROTONS"
-  l1hltmode: "collisions2026"
+  filltype : "COSMICS"
+  l1hltmode: "cosmics2026"
+  minLsToProcess : 1
   step: "RAW2DIGI,RECO:trackerlocalreco,ALCAPRODUCER:SiStripCalZeroBias+SiStripPCLHistos+PromptCalibProdSiStrip"
   scenario: "pp"
   datatier: "ALCARECO"
