@@ -1,10 +1,10 @@
 calibration_name: "EcalPedestals"
 
-file_in_path: /eos/cms/tier0/store/data/Commissioning2026/TestEnablesEcalHcal/RAW/Express-v1/000/
+file_in_path: /eos/cms/tier0/store/data/Run2026A/TestEnablesEcalHcal/RAW/Express-v1/000/
 
 step_2_config:
-  filltype : "COSMICS"
-  l1hltmode: "cosmics2026"
+  filltype : "PROTONS"
+  l1hltmode: "collisions2026"
   minLsToProcess : 50
   step: "RAW2DIGI,RECO,ALCAPRODUCER:EcalTestPulsesRaw"
   scenario: "pp"

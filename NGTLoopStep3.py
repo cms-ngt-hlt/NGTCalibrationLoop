@@ -413,7 +413,7 @@ rm ALCAOUTPUT.sh
         self.requestMinimumFiles = True
         self.waitingFiles = False
         self.enoughFiles = False
-        self.pathWhereFilesAppear = "/tmp/ngt/{self.calibration_name}/"
+        self.pathWhereFilesAppear = "/tmp/ngt/{}/".format(self.calibration_name)
         self.workingDir = "/dev/null"
         self.jobDir = "/dev/null"
         self.alcaJobNumber = 0
@@ -602,7 +602,7 @@ rm ALCAOUTPUT.sh
 
 # --- NEW LOGGING SETUP ---
 # Create /tmp/ngt if it doesn't exist, so we can write the log file
-Path("/tmp/ngt/{args.calibration}").mkdir(parents=True, exist_ok=True)
+Path(f"/tmp/ngt/{args.calibration}").mkdir(parents=True, exist_ok=True)
 
 # Get the main logger
 logger = logging.getLogger()
@@ -614,20 +614,20 @@ formatter = logging.Formatter(
 )
 
 # 1. ALL MESSAGES - Complete history
-all_handler = logging.FileHandler("/tmp/ngt/{args.calibration}/NGTLoopStep3_ALL.log")
+all_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep3_ALL.log")
 all_handler.setLevel(logging.DEBUG)
 all_handler.setFormatter(formatter)
 logger.addHandler(all_handler)
 
 # 2. INFO ONLY
-info_handler = logging.FileHandler("/tmp/ngt/{args.calibration}/NGTLoopStep3_INFO.log")
+info_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep3_INFO.log")
 info_handler.setLevel(logging.INFO)
 info_handler.addFilter(lambda record: record.levelno == logging.INFO)  # ONLY info
 info_handler.setFormatter(formatter)
 logger.addHandler(info_handler)
 
 # 3. WARNING ONLY
-warning_handler = logging.FileHandler("/tmp/ngt/{args.calibration}/NGTLoopStep3_WARNING.log")
+warning_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep3_WARNING.log")
 warning_handler.setLevel(logging.WARNING)
 warning_handler.addFilter(
     lambda record: record.levelno == logging.WARNING
@@ -636,14 +636,14 @@ warning_handler.setFormatter(formatter)
 logger.addHandler(warning_handler)
 
 # 4. ERROR ONLY
-error_handler = logging.FileHandler("/tmp/ngt/{args.calibration}/NGTLoopStep3_ERROR.log")
+error_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep3_ERROR.log")
 error_handler.setLevel(logging.ERROR)
 error_handler.addFilter(lambda record: record.levelno == logging.ERROR)  # ONLY errors
 error_handler.setFormatter(formatter)
 logger.addHandler(error_handler)
 
 # 5. CRITICAL ONLY
-critical_handler = logging.FileHandler("/tmp/ngt/{args.calibration}/NGTLoopStep3_CRITICAL.log")
+critical_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep3_CRITICAL.log")
 critical_handler.setLevel(logging.CRITICAL)
 critical_handler.addFilter(
     lambda record: record.levelno == logging.CRITICAL
