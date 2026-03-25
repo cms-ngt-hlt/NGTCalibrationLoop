@@ -62,8 +62,8 @@ class NGTLoopStep2:
         """Create the working directory for the latched run and record its start time."""
         runNumber = self.runNumber
         logging.info(f"Started processing run {runNumber}!")
-        # We live in directory /tmp/ngt.
-        p = Path(f"/tmp/ngt/{self.calibration_name}/run{runNumber}")
+        # We live in directory /data/ngt.
+        p = Path(f"/data/ngt/{self.calibration_name}/run{runNumber}")
         p.mkdir(parents=True, exist_ok=True)
         # os.chmod(p, 0o777)
         self.workingDir = str(p)
@@ -272,14 +272,14 @@ class NGTLoopStep2:
             isRecentRun = int(delta.total_seconds()) < int(
                 self.maxLatchTimeInHours * 60 * 60
             )
-            runDirMissing = not Path(f"/tmp/ngt/{self.calibration_name}/run{run_number}").exists()
+            runDirMissing = not Path(f"/data/ngt/{self.calibration_name}/run{run_number}").exists()
             # We want a run that
             # 1. (is not running AND is long enough AND has started less than 8 hours ago)
             # OR (2. is still running AND has started less than 8 hours ago)
             if is_running and isRecentRun and runDirMissing:  # Found a live run!
                 logging.info(
                     f"Found running run {run_number},"
-                    f" and no runDir for it /tmp/ngt/{self.calibration_name}/run{run_number}"
+                    f" and no runDir for it /data/ngt/{self.calibration_name}/run{run_number}"
                 )
                 newRunAvailable = True
                 break
@@ -292,7 +292,7 @@ class NGTLoopStep2:
             if runReadyToBeProcessed and runToBeProcessed:
                 logging.info(
                     f"Found ended run {run_number},"
-                    f" and no runDir for it /tmp/ngt/{self.calibration_name}/run{run_number}"
+                    f" and no runDir for it /data/ngt/{self.calibration_name}/run{run_number}"
                 )
                 # Found a recent run that is long enough!
                 newRunAvailable = True

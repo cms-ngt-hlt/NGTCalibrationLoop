@@ -53,9 +53,9 @@ class NGTLoopStep3:
         State(name="CleanupState", on_enter="ExecuteCleanup"),
     ]
 
-    # We check if a new run appeared, e.g. /tmp/ngt/{self.calibration_name}/run386925
+    # We check if a new run appeared, e.g. /data/ngt/{self.calibration_name}/run386925
     def NewRunAppeared(self):
-        """Check /tmp/ngt/ for run directories not yet processed and latch onto the earliest one.
+        """Check /data/ngt/ for run directories not yet processed and latch onto the earliest one.
 
         Returns True if a new run directory was found, False otherwise.
         """
@@ -413,7 +413,7 @@ rm ALCAOUTPUT.sh
         self.requestMinimumFiles = True
         self.waitingFiles = False
         self.enoughFiles = False
-        self.pathWhereFilesAppear = "/tmp/ngt/{}/".format(self.calibration_name)
+        self.pathWhereFilesAppear = "/data/ngt/{}/".format(self.calibration_name)
         self.workingDir = "/dev/null"
         self.jobDir = "/dev/null"
         self.alcaJobNumber = 0
