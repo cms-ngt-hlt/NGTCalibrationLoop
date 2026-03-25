@@ -38,7 +38,12 @@ Automatic Database Upload
 
 ## Setting up and running
 
-The `transitions` package and the `omsAPI` folder within the [oms-api-client](https://gitlab.cern.ch/cmsoms/oms-api-client).
+The `transitions` package and the `omsAPI` folder within the [oms-api-client](https://gitlab.cern.ch/cmsoms/oms-api-client). Step 2 is dependent on a `cron` job that is resetting the credentials every 12 hours via keytab:
+```
+[sakura@ngtcalfu-c2b05-44-01 ~]$ crontab -l
+0 */12 * * * kinit sakura@CERN.CH -k -t /nfshome0/sakura/.globus/sakura.keytab >> /nfshome0/sakura/.globus/kinit_cron.log 2>&1
+```
+and this allows us to access the files on eos from our machines, this was also detailed in [this issue](https://github.com/cms-ngt-hlt/NGTCalibrationLoop/issues/14#issuecomment-3992441495).
 
 All was launched in a tmux session, and all three steps can be run through the `sakura` user. 
 
@@ -47,8 +52,6 @@ Preparing to launch the step 2 script requires:
 sudo -u sakura -i
 tmux new -s CalibrationLoop2
 source /opt/offline/cmsset_default.sh
-unset KRB5CCNAME
-kinit ${USER}@CERN.CH # in case we are setting up step 2
 cmsrel CMSSW_16_0_2
 cd CMSSW_16_0_2/src
 cmsenv
