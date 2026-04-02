@@ -283,6 +283,11 @@ class NGTLoopStep2:
                 )
                 newRunAvailable = True
                 break
+            else:
+                logging.debug(
+                    "Run %s skipped: is_running=%s, isRecentRun=%s, runDirMissing=%s",
+                    run_number, is_running, isRecentRun, runDirMissing
+                )
             # Protection
             if last_ls is None:
                 continue
@@ -300,6 +305,7 @@ class NGTLoopStep2:
 
         # If we didn't find a good run, nothing to do
         if not newRunAvailable:
+            logging.info("No new run available: no running recent run with missing runDir found.")
             return False
 
         # Great, now we have run_info, run_number, etc. from inside the loop
