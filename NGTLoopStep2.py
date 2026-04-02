@@ -428,11 +428,30 @@ class NGTLoopStep2:
         #     "Express-v1/000/398/600/00000/"
         #     "e03573bc-978e-4655-909a-15e45ab59a98.root"
         # )
-        all_files = (
-            subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
-            .stdout.strip()
-            .splitlines()
+
+        logging.info(f"Running command: {cmd}")
+
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            check=False
         )
+
+        logging.info(f"Command stdout:\n{result.stdout}")
+        logging.info(f"Command stderr:\n{result.stderr}")
+
+        if result.returncode != 0:
+            logging.warning(
+                "xrdfs command failed with return code %s\nOutput:\n%s\nError:\n%s",
+                result.returncode,
+                result.stdout,
+                result.stderr,
+            )
+
+        all_files = result.stdout.strip().splitlines()
+
         final_list = []
         for file in all_files:
             output = self.edmFileUtilCommand(file)
