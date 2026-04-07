@@ -52,8 +52,8 @@ Preparing to launch the step 2 script requires:
 sudo -u sakura -i
 tmux new -s CalibrationLoop2
 source /opt/offline/cmsset_default.sh
-cmsrel CMSSW_16_0_2
-cd CMSSW_16_0_2/src
+cmsrel CMSSW_16_0_3
+cd CMSSW_16_0_3/src
 cmsenv
 git clone git@github.com:cms-ngt-hlt/NGTCalibrationLoop.git
 git clone git@github.com:pytransitions/transitions.git
@@ -73,14 +73,9 @@ For step 3:
 sudo -u sakura -i
 tmux new -s CalibrationLoop3 # make sure to start the tmux session from the sakura account, s.t. the other from the group can also have access to it.
 source /opt/offline/cmsset_default.sh
-cmsrel CMSSW_16_0_2
-cd CMSSW_16_0_2/src
-git clone git@github.com:cms-ngt-hlt/NGTCalibrationLoop.git
-git clone git@github.com:pytransitions/transitions.git
-cd transitions
-python3 setup.py install --user
+cmsrel CMSSW_16_0_3
+cd CMSSW_16_0_3/src/NGTCalibrationLoop
 cmsenv
-cd ../NGTCalibrationLoop
 python3 NGTLoopStep3.py -c EcalPedestals  # or SiStripBad
 tmux detach
 ```
@@ -89,7 +84,7 @@ For step 4, we simply do:
 sudo -u sakura -i
 tmux new -s CalibrationLoop4 # make sure to start the tmux session from the sakura account, s.t. the other from the group can also have access to it.
 source /opt/offline/cmsset_default.sh
-cd CMSSW_16_0_2/src/NGTCalibrationLoop
+cd CMSSW_16_0_3/src/NGTCalibrationLoop
 cmsenv
 python3 NGTLoopStep4.py -c EcalPedestals
 tmux detach
