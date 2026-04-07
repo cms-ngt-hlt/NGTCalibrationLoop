@@ -504,7 +504,6 @@ class NGTLoopStep2:
         else:
             self.setOfExpressLS = self.setOfLSToProcess
 
-        # self.setOfExpressLS = self.setOfLSToProcess
         # Extract all LS numbers (as integers)
         str_paths = {"root://eoscms.cern.ch/" + str(p) for p in self.setOfExpressLS}
 
