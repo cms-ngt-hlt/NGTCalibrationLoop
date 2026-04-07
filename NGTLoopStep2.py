@@ -497,14 +497,13 @@ class NGTLoopStep2:
             return
 
         # Thiago: new logic to avoid gigantic cmsRun jobs
-        # if(len(self.setOfLSToProcess) > self.maximumFilesPerJob):
-        #   as_a_list = sorted(self.setOfLSToProcess)
-        #   topTargets = as_a_list[0:self.maximumFilesPerJob]
-        #   self.setOfExpressLS = set(topTargets)
-        # else:
-        #   self.setOfExpressLS = self.setOfLSToProcess
+        if (len(self.setOfLSToProcess) > self.maximumFilesPerJob):
+            as_a_list = sorted(self.setOfLSToProcess)
+            topTargets = as_a_list[0:self.maximumFilesPerJob]
+            self.setOfExpressLS = set(topTargets)
+        else:
+            self.setOfExpressLS = self.setOfLSToProcess
 
-        self.setOfExpressLS = self.setOfLSToProcess
         # Extract all LS numbers (as integers)
         str_paths = {"root://eoscms.cern.ch/" + str(p) for p in self.setOfExpressLS}
 
@@ -537,7 +536,6 @@ class NGTLoopStep2:
         logging.info(ls_numbers)
 
         # ls_numbers = [int(re.search(r"ls(\d{4})", path).group(1)) for path in str_paths]
-
         # Compute min and max, then format back
         min_ls = min(ls_numbers, default=None)
         max_ls = max(ls_numbers, default=None)
@@ -766,6 +764,8 @@ rm {self.tempScriptName}
         self.setOfExpressLS = set()
         self.setOfLSProcessed = set()
         self.setOfExpectedOutputs = set()
+
+        logging.info(f"STARTUP CHECK: Script inherited KRB5CCNAME = {os.environ.get('KRB5CCNAME', 'NOT SET')}")
 
         print(f"We are processing {self.calibration_name}.")
         self.ResetTheMachine()
