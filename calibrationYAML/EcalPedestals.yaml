@@ -1,6 +1,6 @@
 calibration_name: "EcalPedestals"
 
-file_in_path: /eos/cms/tier0/store/data/Run2026B/TestEnablesEcalHcal/RAW/Express-v1/000/
+file_in_path: /eos/cms/tier0/store/data/Run2026C/TestEnablesEcalHcal/RAW/Express-v1/000/
 
 step_2_config:
   filltype : "PROTONS"
