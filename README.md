@@ -41,11 +41,11 @@ Automatic Database Upload
 The `transitions` package and the `omsAPI` folder within the [oms-api-client](https://gitlab.cern.ch/cmsoms/oms-api-client). Step 2 is dependent on a `cron` job that is resetting the credentials every 12 hours via keytab:
 ```
 [sakura@ngtcalfu-c2b05-44-01 ~]$ crontab -l
-0 */12 * * * kinit sakura@CERN.CH -k -t /nfshome0/sakura/.globus/sakura.keytab >> /nfshome0/sakura/.globus/kinit_cron.log 2>&1
+0 */12 * * * env KRB5CCNAME=FILE:/tmp/krb5cc_sakura_static /usr/bin/kinit sakura@CERN.CH -k -t /nfshome0/sakura/.globus/sakura.keytab >> /nfshome0/sakura/.globus/kinit_cron.log 2>&1
 ```
 and this allows us to access the files on eos from our machines, this was also detailed in [this issue](https://github.com/cms-ngt-hlt/NGTCalibrationLoop/issues/14#issuecomment-3992441495).
 
-All was launched in a tmux session, and all three steps can be run through the `sakura` user. 
+All was launched in a tmux session, and all three steps can be run through the `sakura` user. Check whether the correct kerberos ticket was correctly generated via `klist`.
 
 Preparing to launch the step 2 script requires:
 ```bash
