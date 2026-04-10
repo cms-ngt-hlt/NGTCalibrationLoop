@@ -86,13 +86,13 @@ tmux new -s CalibrationLoop4 # make sure to start the tmux session from the saku
 source /opt/offline/cmsset_default.sh
 cd CMSSW_16_0_3/src/NGTCalibrationLoop
 cmsenv
-python3 NGTLoopStep4.py -c EcalPedestals
+python3 NGTLoopStep4.py -c EcalPedestals # or SiStripBad
 tmux detach
 ```
 
 One can check what tmux sessions are running and go back to a session through
 ```
-tmux list-sessinons
+tmux list-sessions
 tmux attach -t 0
 ```
 
