@@ -93,6 +93,11 @@ class NGTLoopStep2:
             return 0
         run_info = response["data"][0]["attributes"]
         last_ls = run_info.get("last_lumisection_number")
+
+        if last_ls is None:
+            logging.warning(f"OMS returned null for last_lumisection_numer in run {runnum}. Returning LS = 0.")
+            return 0
+
         return int(last_ls)
 
     def LSavailable(self):
