@@ -186,11 +186,7 @@ class NGTLoopStep3:
         grace_period_expired = self.RunEndGracePeriodExpired()
         still_have_time = self.StillHaveTime()
 
-        should_wait = (
-            (run_is_active or files_incomplete)
-            and (not grace_period_expired)
-            and still_have_time
-        )
+        should_wait = (run_is_active or files_incomplete) and not grace_period_expired and still_have_time
 
         if should_wait:
             print("ShouldContinueWaiting: True")
