@@ -230,7 +230,7 @@ class NGTLoopStep2:
         # New implementation: we just ask for
         # protons, collisions2025
         # has more than 50LS
-        # started less than 8 hours ago
+        # started less than 7.5 hours ago
         # directory does not already exist
         # Of those, pick the one with lowest run number.
         # ---
@@ -274,8 +274,8 @@ class NGTLoopStep2:
             )
             runDirMissing = not Path(f"/data/ngt/{self.calibration_name}/run{run_number}").exists()
             # We want a run that
-            # 1. (is not running AND is long enough AND has started less than 8 hours ago)
-            # OR (2. is still running AND has started less than 8 hours ago)
+            # 1. (is not running AND is long enough AND has started less than 7.5 hours ago)
+            # OR (2. is still running AND has started less than 7.5 hours ago)
             if is_running and isRecentRun and runDirMissing:  # Found a live run!
                 logging.info(
                     f"Found running run {run_number},"
@@ -689,7 +689,8 @@ rm {self.tempScriptName}
         self.startTime = 0
         self.minimumLS = 1  # these variable names are a bit misleading as they are not
         self.maximumFilesPerJob = 5
-        self.maxLatchTimeInHours = 8  # due to 8 hours of buffering
+        # due to 8 hours of buffering and the 2x 15 min grace periods of step 3 and step 4
+        self.maxLatchTimeInHours = 7.5
         self.runStartTime = None
         self.waitingLS = False
         self.enoughLS = False
@@ -747,7 +748,7 @@ rm {self.tempScriptName}
         self.minimumLS = 1
         self.minLSToProcess = 1
         self.maximumFilesPerJob = 5
-        self.maxLatchTimeInHours = 8
+        self.maxLatchTimeInHours = 7.5
         self.runStartTime = None
         self.waitingLS = False
         self.enoughLS = False
