@@ -126,10 +126,79 @@ class NGTLoopStep3:
         if runEndedFile.exists():
             print("The run is complete!")
             logging.info("The run is complete!")
+            if self.runEndTime is None:
+                self.runEndTime = datetime.now(timezone.utc)
         else:
             print("Not yet...")
             logging.info("Not yet...")
         return not runEndedFile.exists()
+
+    def AllExpectedFilesArrived(self):
+        """Return True if all files listed in expectedOutputs.log have been observed."""
+        expected_log = Path(self.workingDir) / "expectedOutputs.log"
+        if not expected_log.exists():
+            print("expectedOutputs.log not found yet.")
+            logging.info("expectedOutputs.log not found yet.")
+            return False
+
+        with open(expected_log, "r", encoding="utf-8") as f:
+            expected_files = {line.strip() for line in f if line.strip()}
+
+        observed_filenames = {os.path.basename(str(p)) for p in self.setOfFilesObserved}
+
+        all_arrived = expected_files.issubset(observed_filenames)
+        if all_arrived:
+            print("All expected files have arrived.")
+            logging.info("All expected files have arrived.")
+        else:
+            missing = expected_files - observed_filenames
+            print(f"Still waiting for {len(missing)} files: {missing}")
+            logging.info(f"Still waiting for {len(missing)} files: {missing}")
+        return all_arrived
+
+    def RunEndGracePeriodExpired(self):
+        """Return True if the grace period after the run ended has expired."""
+        if self.runEndTime is None:
+            return False
+        now_utc = datetime.now(timezone.utc)
+        diff = now_utc - self.runEndTime
+        expired = diff.total_seconds() >= self.gracePeriodInSeconds
+        if expired:
+            print("Grace period expired.")
+            logging.info("Grace period expired.")
+        else:
+            print(
+                f"Still in grace period: {diff.total_seconds():.1f}s / {self.gracePeriodInSeconds}s"
+            )
+            logging.info(
+                f"Still in grace period: {diff.total_seconds():.1f}s / {self.gracePeriodInSeconds}s"
+            )
+        return expired
+
+    def ShouldContinueWaiting(self):
+        """Consolidated logic to decide if we should remain in WaitingForStep2Files."""
+        # 1. The run is still active OR the file checklist is incomplete.
+        # 2. AND the 15-minute grace period has not yet expired.
+        # 3. AND the overall timeout has not been reached.
+
+        run_is_active = self.RunIsNotComplete()
+        files_incomplete = not self.AllExpectedFilesArrived()
+        grace_period_expired = self.RunEndGracePeriodExpired()
+        still_have_time = self.StillHaveTime()
+
+        should_wait = (
+            (run_is_active or files_incomplete)
+            and (not grace_period_expired)
+            and still_have_time
+        )
+
+        if should_wait:
+            print("ShouldContinueWaiting: True")
+            logging.info("ShouldContinueWaiting: True")
+        else:
+            print("ShouldContinueWaiting: False")
+            logging.info("ShouldContinueWaiting: False")
+        return should_wait
 
     def StillHaveTime(self):
         """Return True if the elapsed time since the run started is within the
@@ -407,7 +476,9 @@ rm ALCAOUTPUT.sh
         logging.info("Machine reset!")
         self.runNumber = 0
         self.startTime = 0
-        self.timeoutInSeconds = 9 * 60 * 60  # 8 hours
+        self.timeoutInSeconds = 7.75 * 60 * 60  # 7.75 hours
+        self.gracePeriodInSeconds = 15 * 60  # 15 minutes
+        self.runEndTime = None
         self.minimumFiles = 1
         self.maximumFiles = 5
         self.requestMinimumFiles = True
@@ -535,18 +606,16 @@ rm ALCAOUTPUT.sh
             conditions=["ThereAreFilesWaiting", "ThereAreEnoughFiles"],
         )
 
-        # If we don't have enough Files, but we are still running,
-        # more Files will come. We go to WaitingForStep2Files,
-        # but only if we still have time!
+        # If we don't have enough Files, we go to WaitingForStep2Files if logic permits
         self.machine.add_transition(
             trigger="ContinueAfterCheckFiles",
             source="CheckingFilesForProcess",
             dest="WaitingForStep2Files",
-            conditions=["RunIsNotComplete", "StillHaveTime"],
+            conditions="ShouldContinueWaiting",
         )
 
-        # If we don't have enough Files, and we are not still running,
-        # no more Files will come. We go to PreparingFinalFiles
+        # If we don't have enough Files, and we should NOT continue waiting,
+        # go to PreparingFinalFiles
         self.machine.add_transition(
             trigger="ContinueAfterCheckFiles",
             source="CheckingFilesForProcess",
