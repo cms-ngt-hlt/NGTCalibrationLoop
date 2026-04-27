@@ -129,10 +129,31 @@ class NGTLoopStep4:
         if runEndedFile.exists():
             print("The run is complete!")
             logging.info("The run is complete!")
+            if self.runEndTime is None:
+                self.runEndTime = datetime.now(timezone.utc)
         else:
             print("Not yet...")
             logging.info("Not yet...")
         return not runEndedFile.exists()
+
+    def InGracePeriod(self):
+        """Return True if we are within the grace period after the run ended."""
+        if self.runEndTime is None:
+            return False
+        now_utc = datetime.now(timezone.utc)
+        diff = now_utc - self.runEndTime
+        in_grace = diff.total_seconds() < self.gracePeriodInSeconds
+        if in_grace:
+            print(
+                f"Still in grace period: {diff.total_seconds():.1f}s / {self.gracePeriodInSeconds}s"
+            )
+            logging.info(
+                f"Still in grace period: {diff.total_seconds():.1f}s / {self.gracePeriodInSeconds}s"
+            )
+        else:
+            print("Grace period expired.")
+            logging.info("Grace period expired.")
+        return in_grace
 
     def StillHaveTime(self):
         """Return True if the elapsed time since the run started is within the
@@ -417,7 +438,9 @@ uploadConditions.py {final_db_name}
         logging.info("Machine reset!")
         self.runNumber = 0
         self.startTime = 0
-        self.timeoutInSeconds = 8 * 60 * 60  # 8 hours
+        self.timeoutInSeconds = 8.0 * 60 * 60  # 8.0 hours
+        self.gracePeriodInSeconds = 30 * 60  # 30 minutes
+        self.runEndTime = None
         self.minimumFiles = 1
         self.waitingFiles = False
         self.enoughFiles = False
@@ -553,7 +576,16 @@ uploadConditions.py {final_db_name}
             conditions=["RunIsNotComplete", "StillHaveTime"],
         )
 
-        # If we don't have enough Files, and we are not still running,
+        # If the run IS complete (runEnd.log exists), we might still want to wait
+        # for more files to appear (e.g. from Step 3), within a grace period.
+        self.machine.add_transition(
+            trigger="ContinueAfterCheckFiles",
+            source="CheckingFilesForProcess",
+            dest="WaitingForFiles",
+            conditions="InGracePeriod",
+        )
+
+        # If we don't have enough Files, and we are not still running (and grace period expired),
         # no more Files will come. We go to PreparingFinalFiles
         self.machine.add_transition(
             trigger="ContinueAfterCheckFiles",
