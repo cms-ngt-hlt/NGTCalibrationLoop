@@ -1,6 +1,6 @@
 calibration_name: "SiStripBad"
 
-file_in_path: "/eos/cms/tier0/store/express/Run2026C/ExpressPhysics/FEVT/Express-v1/000/"
+file_in_path: "/eos/cms/tier0/store/express/Run2026D/ExpressPhysics/FEVT/Express-v1/000/"
 
 # --- STEP 2 CONFIG ---
 step_2_config:
