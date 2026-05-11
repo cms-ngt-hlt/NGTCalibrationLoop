@@ -585,7 +585,15 @@ cd -
 cmsDriver.py expressStep2 --conditions {self.globalTag} \\
 -s {step_args["step"]} --datatier {step_args["datatier"]} \\
 --eventcontent {step_args["eventcontent"]} --data --process {step_args["process"]} \\
---scenario {step_args["scenario"]} --era {step_args["era"]} \\
+"""
+            )
+
+            if "procModifier" in step_args:
+                f.write(f"""--procModifier {step_args["procModifier"]} """)
+
+            f.write(
+                f"""--scenario {step_args["scenario"]} \\
+--era {step_args["era"]} \\
 --nThreads 8 --nStreams 8 -n -1 \\
 --filein {str_paths} --fileout file:{tempOutputFileName} --no_exec \\
 --python_filename {python_filename}
