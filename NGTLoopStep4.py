@@ -32,9 +32,9 @@ parser.add_argument(
     "-c",
     "--calibration",
     type=str,
-    help="Calibration workflow to process: e.g. SiStripBad or EcalPedestals.",
+    help="Calibration workflow to process: SiStripBad, EcalPedestals or BeamSpot",
     required=True,
-    choices=["SiStripBad", "EcalPedestals"],
+    choices=["SiStripBad", "EcalPedestals", "BeamSpot"],
 )
 args = parser.parse_args()
 
