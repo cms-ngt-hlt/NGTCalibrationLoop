@@ -1,0 +1,55 @@
+calibration_name: "BeamSpot"
+
+file_in_path: "/eos/cms/tier0/store/express/Run2026D/ExpressPhysics/FEVT/Express-v1/000/"
+
+# --- STEP 2 CONFIG ---
+step_2_config:
+  filltype : "PROTONS"
+  l1hltmode: "collisions2026"
+  minLsToProcess : 1
+  step: "RAW2DIGI,RECO,ALCAPRODUCER:TkAlMinBias+PromptCalibProdBeamSpotHP"
+  procModifier: "trackingIters01"
+  scenario: "pp"
+  datatier: "ALCARECO"
+  eventcontent: "ALCARECO"
+  process: "RERECO"
+  era: "Run3"
+  nThreads: 8
+  nStreams: 8
+  output_filename_affix: "_beamSpotStep2"
+  
+# --- STEP 3 CONFIG ---
+step_3_config:
+  step_2_root_suffix: "beamSpotStep2.root"
+  step_2_witness_suffix: "beamSpotStep2_job.txt"
+  cms_driver:
+    step: "ALCAOUTPUT:TkAlMinBias,ALCA:PromptCalibProdBeamSpotHP"
+    python_filename_affix: "_beamSpotALCAOUTPUT"
+    triggerResultsProcess: "RECO"
+    step_3_witness_suffix: "beamSpotStep3_job.txt"
+    cleanup_command: "" # todo clean up command here
+
+# --- STEP 4 CONFIG (ALCAHARVEST) ---
+step_4_config:
+  step_3_witness_suffix: "beamSpotStep3_job.txt"
+  step_3_root_filename: "PromptCalibProdBeamSpotHP.root" 
+
+  # CMSSW environment and paths
+  cmssw_base_path: "/nfshome0/sakura/"
+  cms_driver:
+    step: "ALCAHARVEST:BeamSpotHPByLumi" 
+    scenario: "pp"
+    python_filename_affix: "_beamSpotHARVESTING"
+    python_config_mods:
+      - 'process.PoolDBOutputService.toPut[0].tag = cms.string("BeamSpot_NGTDemonstrator")'
+  
+  upload_metadata:
+    destinationDatabase: "oracle://cms_orcon_prod/CMS_CONDITIONS"
+    destinationTags:
+      BeamSpot_NGTDemonstrator: {} # Key is the final tag name
+    inputTag: "BeamSpot_NGTDemonstrator"
+    userText: "Periodical fill-up BeamSpot upload for NGT Demonstrator"
+  
+  # Final file names
+  metadata_filename: "NGTCalibBeamSpot.txt"
+  final_db_name: "NGTCalibBeamSpot.db"
