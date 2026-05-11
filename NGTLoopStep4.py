@@ -32,9 +32,9 @@ parser.add_argument(
     "-c",
     "--calibration",
     type=str,
-    help="Calibration workflow to process: e.g. SiStripBad or EcalPedestals.",
+    help="Calibration workflow to process: SiStripBad, EcalPedestals or BeamSpot",
     required=True,
-    choices=["SiStripBad", "EcalPedestals"],
+    choices=["SiStripBad", "EcalPedestals", "BeamSpot"],
 )
 args = parser.parse_args()
 
@@ -271,12 +271,14 @@ class NGTLoopStep4:
         conf_driver = conf_step4["cms_driver"]
         conf_upload = conf_step4["upload_metadata"]
 
+        since = None if "BeamSpot" in self.calibration_name else self.runNumber
+
         # Write the metadata for the upload
         metadata = {
             "destinationDatabase": conf_upload["destinationDatabase"],
             "destinationTags": conf_upload["destinationTags"],
             "inputTag": conf_upload["inputTag"],
-            "since": self.runNumber,
+            "since": since,
             "userText": conf_upload["userText"],
         }
         metadataFile = alcaJobDir / Path(conf_step4["metadata_filename"])
