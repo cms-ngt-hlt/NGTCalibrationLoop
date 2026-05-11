@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import requests
 import yaml
 from omsapi import OMSAPI
 from transitions import Machine, State
@@ -260,8 +261,9 @@ class NGTLoopStep2:
         try:
             query_response.raise_for_status()
             response = query_response.json()
-        except Exception as e:
-            logging.error(f"Failed to fetch JSON from OMS API. Status Code: {query_response.status_code}")
+        except requests.exceptions.JSONDecodeError as e:
+            logging.error(f"Failed to fetch JSON from OMS API: {e}")
+            logging.error(f"Status Code: {query_response.status_code}")
             logging.error(f"Query response text: {query_response.text}")
             return False
 
