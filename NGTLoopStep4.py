@@ -276,7 +276,7 @@ class NGTLoopStep4:
             "destinationDatabase": conf_upload["destinationDatabase"],
             "destinationTags": conf_upload["destinationTags"],
             "inputTag": conf_upload["inputTag"],
-            "since": self.runNumber,
+            "since": null,
             "userText": conf_upload["userText"],
         }
         metadataFile = alcaJobDir / Path(conf_step4["metadata_filename"])
