@@ -255,7 +255,15 @@ class NGTLoopStep2:
 
         # Sort by run number and get the top 50
         q.sort("run_number", asc=False).paginate(page=1, per_page=50)
-        response = q.data().json()
+        query_response = q.data()
+
+        try:
+            query_response.raise_for_status()
+            response = query_response.json()
+        except Exception as e:
+            logging.error(f"Failed to fetch JSON from OMS API. Status Code: {query_response.status_code}")
+            logging.error(f"Query response text: {query_response.text}")
+            return False
 
         if "data" not in response or not response["data"]:
             logging.info("No PROTONS *collisions* runs found in OMS. Waiting.")
