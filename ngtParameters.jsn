@@ -1,5 +1,5 @@
 {
     "SCRAM_ARCH" : "el8_amd64_gcc13",
-    "CMSSW_VERSION" : "CMSSW_16_0_2_patch1",
+    "CMSSW_VERSION" : "CMSSW_16_0_7_patch1",
     "GLOBAL_TAG" : "160X_dataRun3_ExpressNGT_v0"
 }
