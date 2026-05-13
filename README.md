@@ -35,6 +35,14 @@ EOS RAW Files
     ↓
 Automatic Database Upload
 ```
+## tmux quick start
+To understand exactly what goes into each step, please refer at the `Setting up and running` section. This section assumes, you just want to relaunch scripts after new developments that you want to run on and no tmux sessions running anymore (`tmux kill-server`). Make sure you are in the correct directory and that `cmsenv` is set. To launch all three tmux sessions at the same time, it just needs the input argument of which calibration one wants to launch, so simply:
+```
+./tmux_launch.sh -c SiStripBad # or -c Beamspot or -c EcalPedestals
+```
+This will launch the tmux sessions and make the respective script run inside of it. 
+
+
 
 ## Setting up and running
 
