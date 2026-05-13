@@ -249,10 +249,10 @@ class NGTLoopStep2:
         oms_args = self.calib_config["step_2_config"]
         fillType = oms_args["filltype"]
         l1_hlt_mode = oms_args["l1hltmode"]
-        # --- THIS IS THE NEW, MORE ROBUST FILTER ---
+
         q.filter("fill_type_runtime", fillType)  # default "PROTONS"
         q.filter("l1_hlt_mode", l1_hlt_mode)  # default "collisions2026"
-        # --- END NEW FILTER ---
+        q.filter("stable_beam", True)
 
         # Sort by run number and get the top 50
         q.sort("run_number", asc=False).paginate(page=1, per_page=50)
