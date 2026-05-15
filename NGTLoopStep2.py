@@ -711,7 +711,7 @@ rm {self.tempScriptName}
         self.tempScriptName = ""
         self.startTime = 0
         self.minimumLS = 1  # these variable names are a bit misleading as they are not
-        self.maximumFilesPerJob = 5
+        self.maximumFilesPerJob = 1
         self.maxLatchTimeInHours = 8  # due to 8 hours of buffering
         self.runStartTime = None
         self.waitingLS = False
@@ -769,7 +769,7 @@ rm {self.tempScriptName}
         self.startTime = 0
         self.minimumLS = 1
         self.minLSToProcess = 1
-        self.maximumFilesPerJob = 5
+        self.maximumFilesPerJob = 1
         self.maxLatchTimeInHours = 8
         self.runStartTime = None
         self.waitingLS = False
