@@ -62,6 +62,12 @@ class NGTLoopStep3:
         print("Checking if a new run appeared")
         logging.info("Checking if a new run appeared")
         path = Path(self.pathWhereFilesAppear)
+
+        if not path.exists():
+            print(f"Directory {path} does not exist yet.")
+            print("Waiting ..")
+            return False
+
         currentDirs = {p.name for p in path.iterdir() if p.is_dir()}
         newDirs = currentDirs - self.setOfRunsProcessed
         newRuns = {p for p in newDirs if p.startswith("run")}
