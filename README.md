@@ -1,11 +1,22 @@
 # The NGT Demonstrator Calibration Leg
 
 ## Overview
-This directory implements the calibration leg workflow of our NGT demonstrator. It is designed to run the calibration loop on either of our calibration nodes (`ngtcalfu-c2b05-43-01.cms` and `ngtcalfu-c2b05-44-01.cms`) for the NGT demonstrator, through monitoring ongoing collisions at CMS and rederiving calibrations (for now only EcalPedestals and SiStrip Bad Components) up to the upload to the conditions database of CMS. Each calibration loop is implemented as a finite state machine (FSM) that monitors input data, processes it, and produces the output for the next step:
+This directory implements the calibration leg workflow of our NGT demonstrator: monitoring
+ongoing collisions at CMS and rederiving calibrations (for now only EcalPedestals and SiStrip
+Bad Components) up to the upload to the conditions database of CMS. The pipeline has three
+steps, each of which monitors input data, processes it, and produces the output for the next
+step:
 
 - **Step 2**: Monitors OMS for new runs, processes raw files files from EOS, produces (RE)RECO files
 - **Step 3**: Monitors for step 2 output files, merges them, produces ALCARECO root files
 - **Step 4**: Monitors for step 3 output files, performs harvesting, produces and uploads final payload to condDB to be consumed by the NGT Global Tag
+
+The processing logic for each step lives in `ngt_calibration_loop/step{2,3,4}.py`, and is
+orchestrated by **Apache Airflow** (`airflow_dags/ngt_dags.py`) rather than the hand-rolled
+finite state machines + `while True` polling loops the demonstrator originally used for 2025
+data taking. See "Why Airflow" below for the motivation, and `loop_diagram.md` for the original
+FSM design this replaced (kept as background -- the batching/latching *logic* it documents is
+unchanged, only how it's scheduled and retried).
 
 ### Workflow Data Flow
 
@@ -30,237 +41,245 @@ EOS RAW Files
 │ Step 4: ALCARECO → DB               │
 │ - Monitors for Step 3 outputs       │
 │ - Harvests calibration constants    │
-│ - Output: {calibration}.db          │
+│ - Uploads to condDB (own retry)     │
 └─────────────────────────────────────┘
-    ↓
-Automatic Database Upload
 ```
-## tmux quick start
-To understand exactly what goes into each step, please refer at the `Setting up and running` section. This section assumes, you just want to relaunch scripts after new developments that you want to run on and no tmux sessions running anymore (`tmux kill-server`). Make sure you are in the correct directory and that `cmsenv` is set. To launch all three tmux sessions at the same time, it just needs the input argument of which calibration one wants to launch, so simply:
-```
-./tmux_launch.sh -c SiStripBad # or -c Beamspot or -c EcalPedestals
-```
-This will launch the tmux sessions and make the respective script run inside of it. 
 
+## Why Airflow
 
+The original FSM scripts launched CMSSW jobs (and, in Step 4, the production condDB upload)
+via `subprocess.Popen(...)` and never checked the result -- a failed job just vanished, with
+no retry and no monitoring beyond grepping log files. Airflow gives every launched job real
+retries, timeouts, and UI/task-history visibility, and decouples Step 4's condDB upload from
+its harvesting run so a transient upload failure retries on its own without redoing
+ALCAHARVEST.
 
-## Setting up and running
+**Design**: per `(calibration, step)` pair there are two DAGs (18 total, for the 3
+calibrations x 3 steps):
 
-The `transitions` package and the `omsAPI` folder within the [oms-api-client](https://gitlab.cern.ch/cmsoms/oms-api-client). Step 2 is dependent on a `cron` job that is resetting the credentials every 12 hours via keytab:
-```
-[sakura@ngtcalfu-c2b05-44-01 ~]$ crontab -l
-0 */12 * * * env KRB5CCNAME=FILE:/tmp/krb5cc_sakura_static /usr/bin/kinit sakura@CERN.CH -k -t /nfshome0/sakura/.globus/sakura.keytab >> /nfshome0/sakura/.globus/kinit_cron.log 2>&1
-```
-and this allows us to access the files on eos from our machines, this was also detailed in [this issue](https://github.com/cms-ngt-hlt/NGTCalibrationLoop/issues/14#issuecomment-3992441495).
+- `ngt_step{N}_{calibration}_latch` -- cron-scheduled every 30s, looks for a new LHC run to
+  latch onto (same logic the old FSM's `NewRunAvailable`/`NewRunAppeared` used), and when
+  found triggers the processor DAG for it.
+- `ngt_step{N}_{calibration}_process` -- triggered only externally, with
+  `{"run_number": ..., "cycle": ...}` in its conf. Each DAG run does exactly one
+  check-batch-launch cycle (mirroring the FSM's `WaitingForLS -> CheckingLSForProcess ->
+  Preparing* -> Launching* -> Cleanup` loop): `check_and_batch` decides what's ready,
+  `prepare_job` writes the cmsDriver script, `launch_job` runs it **synchronously** (with
+  retries/timeout -- this is the actual fix, an Airflow task can safely block on a job the way
+  the old Popen-based loop couldn't), Step 4 additionally has a separate `upload_conditions`
+  task with its own retry policy, then `finalize_cycle`/`advance` either retrigger the same
+  processor DAG for the next cycle of the same run, or -- once the run is finished -- trigger
+  the next step's processor DAG.
 
-All was launched in a tmux session, and all three steps can be run through the `sakura` user. Check whether the correct kerberos ticket was correctly generated via `klist`.
+This keeps the FSM's natural per-run audit unit (an operator still thinks "how did run 398600
+go") while making every launched job Airflow-native. Lumisection/file arrival is used only as
+a *trigger signal* for each cycle, not as the unit of retryable work: Step 2's batching
+(`maximumFilesPerJob`) and especially Step 4 (which re-harvests *all* accumulated ALCARECO
+files together, every cycle) depend on batching multiple LS/files into one CMSSW job, which
+one-task-per-file would fight against.
 
-Preparing to launch the step 2 script requires:
+Two behavior changes from the original FSM were needed because Airflow DAG runs, unlike the
+old long-lived process, don't keep in-memory state across cycles:
+1. Step 3/4 job directories (`alcaPromptJob_<hash>`, `harvestJob_<hash>`) are named from a
+   content hash of their input files instead of a monotonic counter, so a retried task
+   reproduces the same directory instead of double-submitting.
+2. "Already processed" bookkeeping (`allLSProcessed.log` etc.) is written incrementally after
+   every cycle instead of only at final cleanup, and read back at the top of each new cycle.
+
+**Known limitation**: `prepare_job`/`launch_job`/`finalize_cycle` each independently rebuild
+the job spec (cheap and idempotent, given point 1 above) rather than passing it through XCom,
+which is simple but means the job's temp script/metadata gets rewritten a few times per cycle
+-- harmless, but a candidate for a future cleanup pass if it matters for a given deployment.
+
+**Scope note**: this is built and fully tested against the offline fake OMS/EOS/CMSSW
+toolchain (`dev/bin/`, `tests/stubs/`, `dev/seed.py`) -- the same one the project's pytest
+suite and live demo already used before this migration. Deploying it onto the real CERN P5
+calibration nodes (real OMS, real EOS/kerberos, real CMSSW, real condDB) is a separate,
+not-yet-done step; see "Deploying on the calibration nodes" below for what that would involve.
+
+## Setting up and running Airflow
+
+Airflow has no official Windows support -- run it from a Linux host (WSL works fine on
+Windows). This repo
+targets Airflow 2.10.x on Python 3.12, with `LocalExecutor` against a local Postgres instance
+(needed for real task parallelism across the 18 DAGs; SQLite only supports `SequentialExecutor`,
+which would serialize every task across every calibration/step).
+
 ```bash
-sudo -u sakura -i
-tmux new -s CalibrationLoop2
-source /opt/offline/cmsset_default.sh
-cmsrel CMSSW_16_0_3
-cd CMSSW_16_0_3/src
-cmsenv
-git clone git@github.com:cms-ngt-hlt/NGTCalibrationLoop.git
-git clone git@github.com:pytransitions/transitions.git
-cd transitions
-python3 setup.py install --user
-cd ../NGTCalibrationLoop
-git clone ssh://git@gitlab.cern.ch:7999/cmsoms/oms-api-client.git
-cp -r oms-api-client/omsapi .
-mkdir -p /tmp/ngt/
-chmod g+ws /tmp/ngt/
-python3 NGTLoopStep2.py -c EcalPedestals  # or SiStripBad
-```
-then quit the tmux session either via keyboard combination or simply closing the terminal. 
+# 1. Airflow venv (separate from the repo's .venv used for plain pytest)
+python3 -m venv ~/airflow-ngt-venv
+source ~/airflow-ngt-venv/bin/activate
+pip install "apache-airflow==2.10.5" \
+  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt"
+pip install psycopg2-binary
+pip install -e .                       # ngt_calibration_loop, used by the DAGs
+pip install -e tests/stubs             # the omsapi test-stub, see its note below
 
-For step 3:
-```bash
-sudo -u sakura -i
-tmux new -s CalibrationLoop3 # make sure to start the tmux session from the sakura account, s.t. the other from the group can also have access to it.
-source /opt/offline/cmsset_default.sh
-cmsrel CMSSW_16_0_3
-cd CMSSW_16_0_3/src/NGTCalibrationLoop
-cmsenv
-python3 NGTLoopStep3.py -c EcalPedestals  # or SiStripBad
-tmux detach
-```
-For step 4, we simply do:
-```bash
-sudo -u sakura -i
-tmux new -s CalibrationLoop4 # make sure to start the tmux session from the sakura account, s.t. the other from the group can also have access to it.
-source /opt/offline/cmsset_default.sh
-cd CMSSW_16_0_3/src/NGTCalibrationLoop
-cmsenv
-python3 NGTLoopStep4.py -c EcalPedestals # or SiStripBad
-tmux detach
+# 2. Postgres (one-time, needs sudo)
+sudo apt-get install -y postgresql
+sudo -u postgres psql -c "CREATE ROLE airflow_ngt WITH LOGIN PASSWORD 'airflow_ngt';"
+sudo -u postgres psql -c "CREATE DATABASE airflow_ngt OWNER airflow_ngt;"
+
+# 3. Initialize Airflow against that DB
+source dev/airflow_env.sh              # AIRFLOW_HOME, executor, DB, DAGs folder
+airflow db migrate
+airflow users create --username admin --password admin \
+  --firstname NGT --lastname Admin --role Admin --email admin@example.invalid
 ```
 
-One can check what tmux sessions are running and go back to a session through
+Why `pip install -e tests/stubs`: the fake `omsapi` package (see below) needs to be importable
+by Airflow's scheduler subprocesses. `PYTHONPATH` set in the launching shell was not reliably
+observed to reach those forked/spawned subprocesses in testing, so the stub is installed as a
+real (tiny) package instead -- see `dev/airflow_demo.sh`'s `demo_env_exports` for the note.
+
+`dev/airflow_demo.sh setup`/`start`/`stop`/`unpause` wrap steps 1-3 above and the day-to-day
+webserver+scheduler lifecycle -- see "Running a live demo" below for the full walkthrough.
+
+### Deploying on the calibration nodes
+
+Not done as part of this migration -- would need, on `ngtcalfu-c2b05-{43,44}-01.cms` (or
+wherever Airflow itself runs, which does not need to be the same host CMSSW/EOS access is
+needed on, since `launch_job`/`upload_conditions` just run local shell scripts): the real
+`oms-api-client` (`git clone ssh://git@gitlab.cern.ch:7999/cmsoms/oms-api-client.git`, `cp -r
+oms-api-client/omsapi` next to `ngt_calibration_loop/`, same as the old `NGTLoopStep2.py` setup
+required) instead of `tests/stubs/omsapi`, the kerberos cron job from the original setup
+instructions for EOS access, `COND_AUTH_PATH` credentials for the condDB upload, and a
+production-grade Airflow deployment (Postgres/MySQL metadata DB, `LocalExecutor` or
+`CeleryExecutor`, the DAGs folder pointed at this repo's `airflow_dags/`).
+
+## Package layout
+
+- `ngt_calibration_loop/` -- the processing logic (OMS/EOS querying, cmsDriver script
+  preparation, batching decisions), as plain stateless functions with no Airflow dependency.
+  `config.py`/`oms.py`/`eos.py`/`shell.py` are shared helpers; `step2.py`/`step3.py`/`step4.py`
+  hold each step's logic. `shell.run_job_script` is the one seam that actually launches a job
+  script, blocking until it completes -- this is what replaced the old `subprocess.Popen(...)`
+  fire-and-forget calls.
+- `airflow_dags/ngt_dags.py` -- the DAG factory described above.
+- `calibrationYAML/` -- per-calibration config (unchanged format from the original FSM setup).
+- `tests/` -- see "Running the tests" below.
+- `dev/` -- the offline fake toolchain and demo scripts, see "Running a live demo" below.
+
+### Directory structure produced by a run
+
 ```
-tmux list-sessions
-tmux attach -t 0
-```
-
-All steps may alternatively be used with `-c SiStripBad`, these are the only calibration workflows configured for now. They must all be running at the same time to guranatee timely uploads of conditions to the database.
-
-
-## Every loop
-### Step 2 loop
-
-`NGTLoopStep2.py` continuously queries OMS for collisions run that started within the last 8 hours (which is the time we have to rederive calibrations and the time for which we buffer). Once a suitable run is found, a working directory is created where we start processing the RAW files available on EOS. The jobs are launched `cmsDriver.py` command. The possible states within this loop are:
-
-- **NotRunning** - Waiting for a new collisions run to process
-- **WaitingForLS** - Monitoring for new lumi sections (LS)
-- **CheckingLSForProcess** - Evaluating available LS for processing
-- **PreparingLS** - Preparing a batch of LS for job submission
-- **PreparingFinalLS** - Preparing the final batch when run ends
-- **PreparingExpressJobs** - Creating job scripts
-- **LaunchingExpressJobs** - Submitting jobs to process LS
-- **CleanupState** - Finalizing run processing
-
-This step also maintains separate log files for different types of logs --- a complete collection of all can be found in `/tmp/ngt/NGTLoopStep2_ALL.log`, to monitor activity, one can do `tail -f /tmp/ngt/NGTLoopStep2_ALL.log`. This step has to be run on a personal cmsusr account due to access needed to EOS.
-
-### Step 3 + 4 loop
-
-Step 3 loop processes the output root files of step2 in order to produce the `ALCARECO` files. The FSM is similar to the one of step 2 described above, used to submit the `ALCA` jobs. Step 3 can be run on either sakura or personal `cmsusr` account, it does not really matter here.
-
-Step 4 loop takes all available ALCARECO files available at a given time that were produced from step 3 and performs the ALCAHARVESTING and the eventual upload of the payload to condDB. It re-harvests files as with time we gain more statistics but we still would like to upload conditions payloads as soon as we have them. Step 4 must be run on the sakura account for the eventual upload to the conditions database.
-
-### Complete Directory Structure
-```
-/tmp/ngt/
-├── calibrationYAML/
-│   ├── SiStripBad.yaml
-│   └── EcalPedestals.yaml
-├── NGTLoopStep2_ALL.log        # Step 2: All log levels
-├── NGTLoopStep2_INFO.log       # Step 2: Info only
-├── NGTLoopStep2_WARNING.log    # Step 2: Warnings only
-├── NGTLoopStep2_ERROR.log      # Step 2: Errors only
-├── NGTLoopStep2_CRITICAL.log   # Step 2: Critical only
-├── NGTLoopStep3_ALL.log        # Step 3: All log levels
-├── ...
-├── NGTLoopStep4_ALL.log        # Step 4: All log levels
-├── ...
+$DATA_BASE_PATH/{calibration}/
 └── run{run_number}/
-    ├── runStart.log            # Created by Step 2: ISO timestamp
-    ├── runEnd.log              # Created by Step 2: Signals completion
+    ├── runStart.log            # Step 2: ISO timestamp
+    ├── runEnd.log              # Step 2: signals completion
     │
-    ├── CMSSW_X_Y_Z/            # CMSSW release (created by Step 2 jobs)
-    │
-    ├── cmsDriver_*.sh          # Step 2: Job scripts (temporary)
+    ├── cmsDriver_<hash>.sh     # Step 2: job script (self-deletes on success)
     ├── run*_LS*_step2.py       # Step 2: CMSSW Python configs
-    ├── run*_LS*_step2.log      # Step 2: Job logs
+    ├── run*_LS*_step2.log      # Step 2: job logs
     ├── run*_LS*_step2.root     # Step 2: RECO output files
-    ├── run*_LS*_step2_job.txt  # Step 2: Witness files
+    ├── run*_LS*_step2_job.txt  # Step 2: witness files
     │
-    ├── allLSProcessed.log              # Step 2: List of processed LS files
-    ├── expectedOutputs.log             # Step 2: Expected Step 2 outputs
-    ├── allStep2FilesProcessed.log      # Step 3: List of processed Step 2 files
-    ├── allStep3FilesProcessed.log      # Step 4: List of processed Step 3 files
+    ├── allLSProcessed.log              # Step 2: incrementally-updated processed-LS log
+    ├── expectedOutputs.log             # Step 2: expected Step 2 outputs
+    ├── allStep2FilesProcessed.log      # Step 3: incrementally-updated processed-files log
+    ├── allStep3FilesProcessed.log      # Step 4: rewritten each cycle with the full harvested set
     │
-    ├── alcaPromptJob000/               # Step 3: First ALCA job
+    ├── alcaPromptJob_<hash>/           # Step 3: one ALCA job per distinct input-file batch
     │   ├── ALCAOUTPUT.sh
     │   ├── run*_step3.py
-    │   ├── stdout.log
-    │   ├── stderr.log
-    │   ├── PromptCalibProdEcalPedestals.root
-    │   └── step3_job.txt               # Witness file
+    │   ├── stdout.log / stderr.log
+    │   ├── PromptCalibProd*.root
+    │   └── *_job.txt                   # witness file
     │
-    ├── alcaPromptJob001/               # Step 3: Second ALCA job
-    │   └── ...
-    │
-    ├── harvestJob000/                  # Step 4: First harvesting job
-    │   ├── HARVESTING.sh
-    │   ├── run*_step4.py
-    │   ├── stdout.log
-    │   ├── stderr.log
-    │   ├── metadata.json
-    │   ├── promptCalibConditions.db
-    │   └── EcalPedestals.db            # Final output
-    │
-    └── harvestJob001/                  # Step 4: Updated harvesting
-        └── ...
+    └── harvestJob_<hash>/              # Step 4: one harvest job per distinct input-file set
+        ├── HARVESTING.sh               # cmsRun ALCAHARVEST only
+        ├── UPLOAD.sh                   # uploadConditions.py -- separate, independently retried
+        ├── run*_step4.py
+        ├── stdout.log / stderr.log
+        ├── upload_stdout.log / upload_stderr.log
+        ├── {metadata_filename}.txt
+        └── {final_db_name}.db
 ```
 
-## Running the FSM logic locally / tests
+(`alcaPromptJob_<hash>`/`harvestJob_<hash>` replace the old FSM's sequentially-numbered
+`alcaPromptJob000`/`harvestJob000` -- see "Why Airflow" above for why.)
 
-The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
-state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
-via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
-(they default to those same production paths, so deployment behavior is unchanged),
-and each script now guards its argument parsing / main loop behind
-`if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
-launching anything.
+## Running the tests
 
-To set up a local environment and run the test suite:
+The `ngt_calibration_loop` logic and the DAG wiring are both covered by pytest, with every
+external dependency mocked -- no CMSSW, EOS, OMS, condDB, or CERN-internal hosts needed.
+
 ```bash
-python3 -m venv .venv
+python3 -m venv .venv          # or use the same venv as above
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest
 ```
 
-The tests in `tests/` mock every external dependency:
-- OMS REST API -> `tests/stubs/omsapi` (an in-memory fake of the query-builder
-  interface `NGTLoopStep2.py` uses; the real `oms-api-client` isn't installed for
-  tests, only for production deploys per the instructions above)
-- `edmFileUtil` / `xrdfs` (EOS access) -> `tests/support/fake_subprocess.FakeEOS`
-- `cmsDriver.py` / `cmsRun` / `uploadConditions.py` -> never actually invoked;
-  `subprocess.Popen` is replaced with a recorder, so "launching a job" just records
-  what would have run
-- filesystem paths -> redirected into a pytest `tmp_path` via the
-  `NGT_PARAMETERS_PATH` / `NGT_CALIBRATION_YAML_DIR` env vars each script reads
+- `tests/test_step{2,3,4}_lib.py` -- exercise `ngt_calibration_loop`'s functions directly:
+  run latching, batching thresholds, timeout/run-ended escape hatches, job prep/launch,
+  and (new) that a failed launch raises so the calling Airflow task would retry.
+  - OMS REST API -> `tests/stubs/omsapi` (in-memory fake of the query-builder interface;
+    the real `oms-api-client` isn't installed for tests, only for real deploys)
+  - `edmFileUtil`/`xrdfs` (EOS access) -> `tests/support/fake_subprocess.FakeEOS`
+  - job launches -> `ngt_calibration_loop.shell.run_job_script` is replaced by the
+    `job_runner` fixture, a recorder that can also be told to raise on demand
+    (`job_runner.queue_failure()`) to exercise the retry-triggering path
+  - filesystem paths -> redirected into a pytest `tmp_path` via `NGT_PARAMETERS_PATH`/
+    `NGT_CALIBRATION_YAML_DIR`
+- `tests/test_dags.py` -- DagBag import-error/structure checks plus direct unit tests of each
+  task's `python_callable` (no live Airflow scheduler/DB needed -- `trigger_dag` calls are
+  monkeypatched out). Guarded by `pytest.importorskip("airflow")`, so it's automatically
+  skipped wherever `apache-airflow` isn't installed (e.g. a plain Windows `.venv`) and the rest
+  of the suite still runs. Where Airflow *is* installed, run `source dev/airflow_env.sh` first
+  so `import airflow` picks up the right `AIRFLOW_HOME`/DB config.
 
-No network access, CMSSW, or CERN-internal hosts are required to run the suite.
+## Running a live demo (no CERN infra needed)
 
-## Running a live demo of the loops (no CERN infra needed)
-
-For watching the actual FSM processes run -- not just pytest -- `dev/live_demo.sh`
-launches real `NGTLoopStep2/3/4.py` processes (one per tmux session) against a fake
-OMS/EOS/CMSSW toolchain in `dev/bin/` (fake `cmsDriver.py`, `cmsRun`, `edmFileUtil`,
-`xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`). Everything runs for real --
-real state transitions, real generated job scripts, real output files flowing from
-Step 2 through Step 3 to a fake Step 4 upload -- entirely offline.
+`dev/airflow_demo.sh` runs the real Airflow webserver + scheduler (in tmux) against the same
+fake OMS/EOS/CMSSW toolchain in `dev/bin/` (fake `cmsDriver.py`, `cmsRun`, `edmFileUtil`,
+`xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`) and `dev/seed.py` used by the tests.
+Everything runs for real -- real DAG runs, real generated job scripts, real output files
+flowing Step 2 -> Step 3 -> Step 4 to a fake condDB upload -- entirely offline. Airflow has
+no official Windows support, so this needs a Linux host (WSL works fine on Windows).
 
 ```bash
-./dev/live_demo.sh setup                                  # create ./demo-env scratch env
-./dev/live_demo.sh start-all EcalPedestals                 # launch all 3 steps in tmux
-./dev/live_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
-tmux attach -t NGTDemo2_EcalPedestals                       # watch it react (Ctrl-b d to detach)
-./dev/live_demo.sh add-ls EcalPedestals 398600 53           # simulate a new lumisection arriving
-./dev/live_demo.sh end-run 398600                           # simulate the run ending
-./dev/live_demo.sh status                                   # list running sessions
-./dev/live_demo.sh stop-all EcalPedestals                   # tear down
+./dev/airflow_demo.sh setup                                # create ./demo-env scratch env
+./dev/airflow_demo.sh start                                 # webserver (:8090) + scheduler, tmux
+./dev/airflow_demo.sh unpause EcalPedestals                 # unpause its 6 DAGs
+./dev/airflow_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
+./dev/airflow_demo.sh ui                                    # print the UI URL + login
+./dev/airflow_demo.sh add-ls EcalPedestals 398600 53         # simulate a new lumisection arriving
+./dev/airflow_demo.sh end-run 398600                         # simulate the run ending
+./dev/airflow_demo.sh status                                 # list running tmux sessions
+./dev/airflow_demo.sh stop                                   # tear down webserver + scheduler
 ```
 
-For a guided, narrated walkthrough of all of the above -- runs `setup`, launches all
-three steps, seeds a couple of runs (a few lumisections each, seeded incrementally),
-and after every command shows you the relevant output directories/files so you can
-see each state machine actually doing something, pausing between steps -- use:
+For a guided, narrated walkthrough that pauses between steps and shows you the relevant output
+directories/files and DAG-run history so you can watch the latch -> process(xN cycles) ->
+handoff chain actually happening (plus a demonstration of a forced job failure retrying), use:
+
 ```bash
-./dev/interactive_demo.sh                                    # 2 runs, 2 LS each, EcalPedestals
-./dev/interactive_demo.sh --calibration SiStripBad --runs 3 --ls-per-run 4
-./dev/interactive_demo.sh --yes                               # don't pause between steps
+./dev/airflow_interactive_demo.sh                                    # EcalPedestals, run 398600, 2 LS
+./dev/airflow_interactive_demo.sh --calibration SiStripBad --ls 4
+./dev/airflow_interactive_demo.sh --yes                              # don't pause between steps
 ```
 
-Run `./dev/live_demo.sh` with no arguments for the full command list. All state
-lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
-this repo) -- delete it any time to reset the demo environment.
+Run `./dev/airflow_demo.sh` with no arguments for the full command list. All demo *data* lives
+under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside this repo) --
+delete it any time to reset the demo environment (the Airflow instance itself -- metadata DB,
+`AIRFLOW_HOME` -- is separate/persistent, see "Setting up and running Airflow" above).
 
 Two settings are overridable via environment variables:
 
 | Variable                 | Default                              | Meaning                          |
 |---------------------------|--------------------------------------|-----------------------------------|
 | `NGT_DEV_HOME`             | `./demo-env`                         | scratch state directory           |
-| `NGT_LOOP_SLEEP_SECONDS`   | `5` (production default: `60`)       | Step 3/4 poll interval, seconds   |
+| `NGT_LOOP_SLEEP_SECONDS`   | `10` (production default: `60`)      | Step 3/4 cycle-retrigger delay, seconds |
 
-e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./dev/live_demo.sh setup`. `NGT_DEV_HOME` is read
-at `setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup`
-after changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh each time a loop is
-started (`start2` / `start3` / `start4` / `start-all`).
+e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./dev/airflow_demo.sh setup`. `NGT_DEV_HOME` is read at
+`setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup` after
+changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh by the `advance` task each time it
+retriggers the next cycle.
 
 ## Nota Bene
-There are quite a lot of issues remaining, still. The version we are at right now is the "functioning" version that was used for the demonstrator in the 2025 data taking. However, for 2026 data-taking, we plan to improve and have worked on all the issues. 
+There are quite a lot of issues remaining, still. The FSM-based version this replaced was the
+"functioning" version used for the demonstrator in the 2025 data taking; this Airflow-based
+version is the planned improvement for 2026 data-taking, built and tested offline as described
+above. Actual rollout onto the P5 calibration nodes is separate future work -- see "Deploying
+on the calibration nodes".

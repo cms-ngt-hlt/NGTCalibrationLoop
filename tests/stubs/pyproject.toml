@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ngt-omsapi-stub"
+version = "0.1.0"
+description = "In-memory stand-in for the CERN oms-api-client, used by tests and the offline demo toolchain (see omsapi/__init__.py docstring)."
+requires-python = ">=3.10"
+
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["omsapi*"]
