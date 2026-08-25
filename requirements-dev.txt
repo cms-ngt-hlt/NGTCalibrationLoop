@@ -1,2 +1,7 @@
 -r requirements.txt
 pytest>=8.4.2,==9.1.1;python_version>="3.10"
+
+# Optional: only needed to run the DAG tests in tests/airflow_designs/, which are skipped (via
+# pytest.importorskip) when apache-airflow isn't installed. Install it in the
+# separate Airflow venv (see README.md) to exercise DAG-wiring tests locally;
+# the regular dev venv can stay without it and the rest of the suite still runs.
