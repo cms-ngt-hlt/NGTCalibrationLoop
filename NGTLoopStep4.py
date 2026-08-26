@@ -21,10 +21,6 @@ from transitions import Machine, State
 
 os.umask(0o002)
 
-os.environ["COND_AUTH_PATH"] = os.path.expanduser("/nfshome0/sakura")
-print("COND_AUTH_PATH set to:", os.environ["COND_AUTH_PATH"])
-logging.info("COND_AUTH_PATH set to: %s", os.environ["COND_AUTH_PATH"])
-
 parser = argparse.ArgumentParser(
     description="Runs step4 of our calibration loop of a given calibration workflow."
 )
@@ -36,7 +32,28 @@ parser.add_argument(
     required=True,
     choices=["SiStripBad", "EcalPedestals", "BeamSpot"],
 )
-args = parser.parse_args()
+
+
+def _load_ngt_parameters():
+    """Load ngtParameters.jsn, honoring the NGT_PARAMETERS_PATH override used by tests."""
+    parameters_path = os.environ.get(
+        "NGT_PARAMETERS_PATH", os.path.join(os.getcwd(), "ngtParameters.jsn")
+    )
+    with open(parameters_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_calibration_config(calibration_name):
+    """Load a calibration workflow YAML, honoring the NGT_CALIBRATION_YAML_DIR
+    override used by tests."""
+    calibration_yaml_dir = os.environ.get(
+        "NGT_CALIBRATION_YAML_DIR", os.path.join(os.getcwd(), "calibrationYAML")
+    )
+    calibration_config_path = os.path.join(
+        calibration_yaml_dir, f"{calibration_name}.yaml"
+    )
+    with open(calibration_config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
 class NGTLoopStep4:
@@ -70,6 +87,7 @@ class NGTLoopStep4:
         if not path.exists():
             print(f"Directory {path} does not exist yet..")
             print("Waiting..")
+            return False
 
         currentDirs = {p.name for p in path.iterdir() if p.is_dir()}
         newDirs = currentDirs - self.setOfRunsProcessed
@@ -428,28 +446,24 @@ uploadConditions.py {final_db_name}
         self.minimumFiles = 1
         self.waitingFiles = False
         self.enoughFiles = False
-        self.pathWhereFilesAppear = "/data/ngt/{}/".format(self.calibration_name)
         self.workingDir = "/dev/null"
         self.jobDir = "/dev/null"
         self.alcaJobNumber = 0
         self.preparedFinalFiles = False
 
-        calibration_config_path = os.path.join(
-            os.getcwd(),
-            "calibrationYAML",
-            f"{self.calibration_name}.yaml",
-        )
-        with open(calibration_config_path, "r", encoding="utf-8") as f:
-            self.calib_config = yaml.safe_load(f)
+        self.calib_config = _load_calibration_config(self.calibration_name)
         self.CMSSWPath = self.calib_config["step_4_config"]["cmssw_base_path"]
 
         # Read some configurations
-        config_path = os.path.join(os.getcwd(), "ngtParameters.jsn")
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+        config = _load_ngt_parameters()
         self.scramArch = config["SCRAM_ARCH"]
         self.cmsswVersion = config["CMSSW_VERSION"]
         self.globalTag = config["GLOBAL_TAG"]
+        self.dataBasePath = config.get("DATA_BASE_PATH", "/data/ngt")
+        self.pathWhereFilesAppear = os.path.join(self.dataBasePath, self.calibration_name) + "/"
+        self.condAuthPath = os.path.expanduser(config.get("COND_AUTH_PATH", "/nfshome0/sakura"))
+        os.environ["COND_AUTH_PATH"] = self.condAuthPath
+        logging.info(f"COND_AUTH_PATH set to: {self.condAuthPath}")
 
         self.setOfFilesObserved = set()
         self.setOfFilesToProcess = set()
@@ -457,7 +471,7 @@ uploadConditions.py {final_db_name}
         self.setOfFilesProcessed = set()
         self.setOfExpectedOutputs = set()
 
-    def __init__(self, name):
+    def __init__(self, name, calibration_name):
         """Initialise the NGTLoopStep4 finite-state machine.
 
         Sets the instance name and calibration workflow, initialises the set of
@@ -467,7 +481,7 @@ uploadConditions.py {final_db_name}
 
         # No anonymous FSMs in my watch!
         self.name = name
-        self.calibration_name = args.calibration
+        self.calibration_name = calibration_name
 
         self.runNumber = 0
         self.startTime = datetime.now(timezone.utc)
@@ -476,6 +490,8 @@ uploadConditions.py {final_db_name}
         self.waitingFiles = False
         self.enoughFiles = False
         self.pathWhereFilesAppear = ""
+        self.dataBasePath = ""
+        self.condAuthPath = ""
         self.workingDir = ""
         self.jobDir = ""
         self.alcaJobNumber = 0
@@ -615,90 +631,109 @@ uploadConditions.py {final_db_name}
         )
 
 
-# --- NEW LOGGING SETUP ---
-# Create /tmp/ngt if it doesn't exist, so we can write the log file
-Path(f"/tmp/ngt/{args.calibration}").mkdir(parents=True, exist_ok=True)
+def _setup_logging(calibration_name):
+    """Set up the split-by-level log files for a run of Step 4.
 
-# Get the main logger
-logger = logging.getLogger()
-logger.setLevel(logging.DEBUG)  # Capture everything at logger level
+    Honors DATA_BASE_PATH/LOG_BASE_PATH overrides in ngtParameters.jsn so
+    tests can redirect logging away from /tmp/ngt.
+    """
+    config = _load_ngt_parameters()
+    log_base_path = config.get("LOG_BASE_PATH", "/tmp/ngt")
 
-# Create formatter
-formatter = logging.Formatter(
-    "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-)
+    # Create the log dir if it doesn't exist, so we can write the log file
+    log_dir = Path(log_base_path) / calibration_name
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-# 1. ALL MESSAGES - Complete history
-all_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep4_ALL.log")
-all_handler.setLevel(logging.DEBUG)
-all_handler.setFormatter(formatter)
-logger.addHandler(all_handler)
+    # Get the main logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)  # Capture everything at logger level
 
-# 2. INFO ONLY
-info_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep4_INFO.log")
-info_handler.setLevel(logging.INFO)
-info_handler.addFilter(lambda record: record.levelno == logging.INFO)  # ONLY info
-info_handler.setFormatter(formatter)
-logger.addHandler(info_handler)
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
 
-# 3. WARNING ONLY
-warning_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep4_WARNING.log")
-warning_handler.setLevel(logging.WARNING)
-warning_handler.addFilter(
-    lambda record: record.levelno == logging.WARNING
-)  # ONLY warnings
-warning_handler.setFormatter(formatter)
-logger.addHandler(warning_handler)
+    # 1. ALL MESSAGES - Complete history
+    all_handler = logging.FileHandler(log_dir / "NGTLoopStep4_ALL.log")
+    all_handler.setLevel(logging.DEBUG)
+    all_handler.setFormatter(formatter)
+    logger.addHandler(all_handler)
 
-# 4. ERROR ONLY
-error_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep4_ERROR.log")
-error_handler.setLevel(logging.ERROR)
-error_handler.addFilter(lambda record: record.levelno == logging.ERROR)  # ONLY errors
-error_handler.setFormatter(formatter)
-logger.addHandler(error_handler)
+    # 2. INFO ONLY
+    info_handler = logging.FileHandler(log_dir / "NGTLoopStep4_INFO.log")
+    info_handler.setLevel(logging.INFO)
+    info_handler.addFilter(lambda record: record.levelno == logging.INFO)  # ONLY info
+    info_handler.setFormatter(formatter)
+    logger.addHandler(info_handler)
 
-# 5. CRITICAL ONLY
-critical_handler = logging.FileHandler(f"/tmp/ngt/{args.calibration}/NGTLoopStep4_CRITICAL.log")
-critical_handler.setLevel(logging.CRITICAL)
-critical_handler.addFilter(
-    lambda record: record.levelno == logging.CRITICAL
-)  # ONLY critical
-critical_handler.setFormatter(formatter)
-logger.addHandler(critical_handler)
+    # 3. WARNING ONLY
+    warning_handler = logging.FileHandler(log_dir / "NGTLoopStep4_WARNING.log")
+    warning_handler.setLevel(logging.WARNING)
+    warning_handler.addFilter(
+        lambda record: record.levelno == logging.WARNING
+    )  # ONLY warnings
+    warning_handler.setFormatter(formatter)
+    logger.addHandler(warning_handler)
 
-# 6. Screen output (stderr) - warnings and above
-stream_handler = logging.StreamHandler(sys.stderr)
-stream_handler.setLevel(logging.WARNING)
-stream_handler.setFormatter(formatter)
-logger.addHandler(stream_handler)
+    # 4. ERROR ONLY
+    error_handler = logging.FileHandler(log_dir / "NGTLoopStep4_ERROR.log")
+    error_handler.setLevel(logging.ERROR)
+    error_handler.addFilter(lambda record: record.levelno == logging.ERROR)  # ONLY errors
+    error_handler.setFormatter(formatter)
+    logger.addHandler(error_handler)
 
-# Optional: Add a simple startup message to verify logging is working
-logging.info("Logging initialized - writing to split log files")
-logging.warning("Warning-level logging active")
-# --- END OF ENHANCED LOGGING SETUP ---
+    # 5. CRITICAL ONLY
+    critical_handler = logging.FileHandler(log_dir / "NGTLoopStep4_CRITICAL.log")
+    critical_handler.setLevel(logging.CRITICAL)
+    critical_handler.addFilter(
+        lambda record: record.levelno == logging.CRITICAL
+    )  # ONLY critical
+    critical_handler.setFormatter(formatter)
+    logger.addHandler(critical_handler)
 
-loop = NGTLoopStep4("Step4")
+    # 6. Screen output (stderr) - warnings and above
+    stream_handler = logging.StreamHandler(sys.stderr)
+    stream_handler.setLevel(logging.WARNING)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
-SLEEP_TIME = 60
+    # Optional: Add a simple startup message to verify logging is working
+    logging.info("Logging initialized - writing to split log files")
+    logging.warning("Warning-level logging active")
 
-while True:
-    # pylint: disable=no-member
-    while loop.state == "NotRunning":
-        time.sleep(
-            SLEEP_TIME
-        )  # Should be close to 60 for deployment, close to 1 for testing
-        loop.TryLookForRun()
 
-    while loop.state == "WaitingForFiles":
-        loop.TryProcessFiles()
-        time.sleep(SLEEP_TIME)
-        loop.ContinueAfterCheckFiles()
-        time.sleep(SLEEP_TIME)
-        loop.TryPrepareHarvestingJobs()
-        time.sleep(SLEEP_TIME)
-        loop.TryLaunchHarvestingJobs()
-        time.sleep(SLEEP_TIME)
-        loop.ContinueToCleanup()
-        time.sleep(SLEEP_TIME)
-        loop.ContinueAfterCleanup()
-        time.sleep(SLEEP_TIME)
+def main():
+    """Parse CLI args, set up logging, and run the Step 4 FSM loop forever."""
+    cli_args = parser.parse_args()
+
+    _setup_logging(cli_args.calibration)
+
+    loop = NGTLoopStep4("Step4", cli_args.calibration)
+
+    sleep_time = int(os.environ.get("NGT_LOOP_SLEEP_SECONDS", 60))
+
+    while True:
+        # pylint: disable=no-member
+        while loop.state == "NotRunning":
+            time.sleep(
+                sleep_time
+            )  # Should be close to 60 for deployment, close to 1 for testing
+            loop.TryLookForRun()
+
+        while loop.state == "WaitingForFiles":
+            loop.TryProcessFiles()
+            time.sleep(sleep_time)
+            loop.ContinueAfterCheckFiles()
+            time.sleep(sleep_time)
+            loop.TryPrepareHarvestingJobs()
+            time.sleep(sleep_time)
+            loop.TryLaunchHarvestingJobs()
+            time.sleep(sleep_time)
+            loop.ContinueToCleanup()
+            time.sleep(sleep_time)
+            loop.ContinueAfterCleanup()
+            time.sleep(sleep_time)
+
+
+if __name__ == "__main__":
+    main()
