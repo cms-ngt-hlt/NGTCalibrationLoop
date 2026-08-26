@@ -185,5 +185,82 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
         └── ...
 ```
 
+## Running the FSM logic locally / tests
+
+The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
+state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
+via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
+(they default to those same production paths, so deployment behavior is unchanged),
+and each script now guards its argument parsing / main loop behind
+`if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
+launching anything.
+
+To set up a local environment and run the test suite:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests in `tests/` mock every external dependency:
+- OMS REST API -> `tests/stubs/omsapi` (an in-memory fake of the query-builder
+  interface `NGTLoopStep2.py` uses; the real `oms-api-client` isn't installed for
+  tests, only for production deploys per the instructions above)
+- `edmFileUtil` / `xrdfs` (EOS access) -> `tests/support/fake_subprocess.FakeEOS`
+- `cmsDriver.py` / `cmsRun` / `uploadConditions.py` -> never actually invoked;
+  `subprocess.Popen` is replaced with a recorder, so "launching a job" just records
+  what would have run
+- filesystem paths -> redirected into a pytest `tmp_path` via the
+  `NGT_PARAMETERS_PATH` / `NGT_CALIBRATION_YAML_DIR` env vars each script reads
+
+No network access, CMSSW, or CERN-internal hosts are required to run the suite.
+
+## Running a live demo of the loops (no CERN infra needed)
+
+For watching the actual FSM processes run -- not just pytest -- `dev/live_demo.sh`
+launches real `NGTLoopStep2/3/4.py` processes (one per tmux session) against a fake
+OMS/EOS/CMSSW toolchain in `dev/bin/` (fake `cmsDriver.py`, `cmsRun`, `edmFileUtil`,
+`xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`). Everything runs for real --
+real state transitions, real generated job scripts, real output files flowing from
+Step 2 through Step 3 to a fake Step 4 upload -- entirely offline.
+
+```bash
+./dev/live_demo.sh setup                                  # create ./demo-env scratch env
+./dev/live_demo.sh start-all EcalPedestals                 # launch all 3 steps in tmux
+./dev/live_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
+tmux attach -t NGTDemo2_EcalPedestals                       # watch it react (Ctrl-b d to detach)
+./dev/live_demo.sh add-ls EcalPedestals 398600 53           # simulate a new lumisection arriving
+./dev/live_demo.sh end-run 398600                           # simulate the run ending
+./dev/live_demo.sh status                                   # list running sessions
+./dev/live_demo.sh stop-all EcalPedestals                   # tear down
+```
+
+For a guided, narrated walkthrough of all of the above -- runs `setup`, launches all
+three steps, seeds a couple of runs (a few lumisections each, seeded incrementally),
+and after every command shows you the relevant output directories/files so you can
+see each state machine actually doing something, pausing between steps -- use:
+```bash
+./dev/interactive_demo.sh                                    # 2 runs, 2 LS each, EcalPedestals
+./dev/interactive_demo.sh --calibration SiStripBad --runs 3 --ls-per-run 4
+./dev/interactive_demo.sh --yes                               # don't pause between steps
+```
+
+Run `./dev/live_demo.sh` with no arguments for the full command list. All state
+lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
+this repo) -- delete it any time to reset the demo environment.
+
+Two settings are overridable via environment variables:
+
+| Variable                 | Default                              | Meaning                          |
+|---------------------------|--------------------------------------|-----------------------------------|
+| `NGT_DEV_HOME`             | `./demo-env`                         | scratch state directory           |
+| `NGT_LOOP_SLEEP_SECONDS`   | `5` (production default: `60`)       | Step 3/4 poll interval, seconds   |
+
+e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./dev/live_demo.sh setup`. `NGT_DEV_HOME` is read
+at `setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup`
+after changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh each time a loop is
+started (`start2` / `start3` / `start4` / `start-all`).
+
 ## Nota Bene
 There are quite a lot of issues remaining, still. The version we are at right now is the "functioning" version that was used for the demonstrator in the 2025 data taking. However, for 2026 data-taking, we plan to improve and have worked on all the issues. 
