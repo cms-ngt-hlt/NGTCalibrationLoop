@@ -1,10 +1,13 @@
-# Runtime dependencies for NGTLoopStep2/3/4.py.
+# Runtime dependencies for the ngt_calibration_loop package and airflow_automation/airflow_dags/.
 #
 # Not included here: the `omsapi` package (oms-api-client). It's not published on
 # PyPI -- production deploys clone it from CERN GitLab and `cp -r` the `omsapi`
-# folder next to these scripts (see README.md). It is only imported by Step 2, and
-# only actually reaches the network when NOT running under the test suite (which
-# substitutes tests/stubs/omsapi instead).
-transitions==0.9.3
-PyYAML==6.0.3
-requests>=2.32.5,==2.34.2;python_version>="3.10"
+# folder next to ngt_calibration_loop/ (see README.md). It is only imported by
+# ngt_calibration_loop.oms, and only actually reaches the network when NOT running
+# under the test suite (which substitutes tests/stubs/omsapi instead).
+#
+# apache-airflow itself is NOT listed here -- it has no official Windows support,
+# so it's only installed in the separate Linux venv used to run/test the DAGs for
+# real (see README.md's Airflow setup section). This file covers what's needed to
+# run the ngt_calibration_loop pytest suite (tests/test_step{2,3,4}_lib.py) anywhere.
+-e .

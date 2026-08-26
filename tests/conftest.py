@@ -6,8 +6,9 @@ LS/file batching, timeouts, cleanup) with every external dependency mocked out:
 
 - OMS REST API -> tests/stubs/omsapi (in-memory fake, see that module's docstring)
 - edmFileUtil / xrdfs (EOS access)  -> tests/support/fake_subprocess.FakeEOS
-- cmsDriver.py / cmsRun / uploadConditions.py -> never actually invoked; Popen is
-  replaced with a recorder so "launching a job" just records what would have run
+- cmsDriver.py / cmsRun / uploadConditions.py -> never actually invoked;
+  ngt_calibration_loop.shell.run_job_script is replaced with a recorder (see the
+  `job_runner` fixture) so "launching a job" just records what would have run
 - /data/ngt, /tmp/ngt, /nfshome0/sakura -> redirected to a pytest tmp_path via the
   NGT_PARAMETERS_PATH / NGT_CALIBRATION_YAML_DIR env var overrides read by the
   NGTLoopStepN.py scripts (see `_load_ngt_parameters` / `_load_calibration_config`
@@ -108,6 +109,40 @@ def popen_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "Popen", FakePopen(calls))
     return calls
+
+
+@pytest.fixture
+def job_runner(monkeypatch):
+    """Replace ngt_calibration_loop.shell.run_job_script with a recorder, so
+    tests never try to actually launch cmsDriver/cmsRun/uploadConditions.py.
+
+    Returns a list-like recorder of calls (each a dict with script_name/cwd/
+    stdout_log/stderr_log). Succeeds by default; call
+    `job_runner.queue_failure()` before an action to make the *next* launch
+    raise shell.JobScriptFailedError, for exercising Airflow's retry path.
+    """
+    from ngt_calibration_loop import shell
+
+    class JobRunnerRecorder(list):
+        def __init__(self):
+            super().__init__()
+            self._outcomes = []
+
+        def queue_failure(self, exc=None):
+            self._outcomes.append(exc or shell.JobScriptFailedError("forced test failure"))
+
+    recorder = JobRunnerRecorder()
+
+    def fake_run_job_script(script_name, cwd, stdout_log=None, stderr_log=None, timeout=None):
+        recorder.append(
+            {"script_name": script_name, "cwd": str(cwd), "stdout_log": stdout_log, "stderr_log": stderr_log}
+        )
+        if recorder._outcomes:
+            raise recorder._outcomes.pop(0)
+        return shell.JobResult(returncode=0, stdout_log=stdout_log, stderr_log=stderr_log)
+
+    monkeypatch.setattr(shell, "run_job_script", fake_run_job_script)
+    return recorder
 
 
 @pytest.fixture

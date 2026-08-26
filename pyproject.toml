@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ngt-calibration-loop"
+version = "0.1.0"
+description = "NGT calibration loop processing logic, shared by pytest and the Airflow DAGs in airflow_automation/airflow_dags/."
+requires-python = ">=3.10"
+dependencies = [
+    "PyYAML==6.0.3",
+    "requests>=2.32.5,==2.34.2",
+]
+
+[tool.setuptools.packages.find]
+include = ["ngt_calibration_loop*"]
