@@ -239,7 +239,24 @@ def _make_finalize_callable(step_num, calibration):
         ctx = _build_ctx(step_num, calibration, run_number)
         decision = _make_decision(step_num, action, batch)
 
-        job_spec = _prepare(step_num, lib, ctx, batch) if action != "wait" else None
+        job_spec = None
+        if action != "wait":
+            job_spec = _prepare(step_num, lib, ctx, batch)
+            if job_spec is None and step_num == 3:
+                # Step 3's job deletes its own (Step 2) input files on success
+                # (see ngt_calibration_loop.step3's rm_express_files). If
+                # launch_job already ran this exact batch successfully earlier
+                # in this cycle, re-deriving via _prepare() here finds those
+                # inputs gone and would look identical to "nothing to
+                # process" -- check what launch_job actually did instead of
+                # assuming that.
+                with create_session() as session:
+                    launch_ti = context["dag_run"].get_task_instance("launch_job", session=session)
+                    launched_ok = launch_ti is not None and launch_ti.state == "success"
+                if launched_ok:
+                    job_spec = step3.JobSpec(
+                        job_dir=ctx.working_dir, script_name="", witness_file="", input_files=set(batch)
+                    )
         is_final = lib.finalize_cycle(ctx, job_spec, decision)
 
         context["ti"].xcom_push(key="is_final", value=is_final)
