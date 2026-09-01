@@ -37,6 +37,13 @@
 #                                      Neither touches any engine's OWN state
 #                                      (e.g. Airflow's DAG-run history) -- see
 #                                      airflow_automation/airflow_demo/airflow_demo.sh's reset-* commands.
+#                                      `reset` while an engine's processes are
+#                                      still *running* can leave in-flight
+#                                      work stuck rather than erroring cleanly
+#                                      -- see sim_reset()'s comment below; stop
+#                                      the engine first, or use its adapter's
+#                                      own coordinated reset if it has one
+#                                      (e.g. airflow_automation/airflow_demo/airflow_demo.sh reset-scenario).
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export NGT_DEV_HOME="${NGT_DEV_HOME:-$REPO_DIR/demo-env}"
@@ -92,6 +99,19 @@ JSON
 # does NOT touch any engine's own state -- an engine that keeps run-history
 # outside $NGT_DEV_HOME (e.g. Airflow's metadata DB) needs its own reset too,
 # see airflow_automation/airflow_demo/airflow_demo.sh's reset-* commands.
+#
+# Caution (deliberately not checked/enforced here -- this function stays
+# engine-agnostic on purpose, see the module docstring): deleting
+# $NGT_DEV_HOME out from under an engine whose processes are *currently
+# running* and hold in-flight work referencing it (e.g. a long-lived poll or
+# a deferred/suspended wait) can leave that work stuck rather than erroring
+# cleanly -- confirmed live with Airflow's triggerer (ngt_dags_per_file.py's
+# wait_for_files): an already-deferred task kept polling stale state and
+# never resolved until the triggerer process itself was restarted, and each
+# process's own console log silently stopped updating (still writing to the
+# now-unlinked old file). If an engine is running, stop it first, or use its
+# adapter's own coordinated reset if it has one (e.g. airflow_automation/airflow_demo/airflow_demo.sh
+# reset-scenario) rather than calling this directly.
 sim_reset() {
   echo "Removing $NGT_DEV_HOME"
   rm -rf "$NGT_DEV_HOME"

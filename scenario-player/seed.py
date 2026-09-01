@@ -29,6 +29,20 @@ OMS_RUNS_FILE = NGT_DEV_HOME / "oms_runs.json"
 CALIB_YAML_DIR = NGT_DEV_HOME / "calibrationYAML"
 CALIBRATIONS = ("SiStripBad", "EcalPedestals", "BeamSpot")
 
+# ngt_calibration_loop's step2/3/4 each wait up to several *production* hours
+# (8h/9h/8h) before giving up on a run/calibration that never reconciles --
+# correct for real OMS/EOS, but not something a live-test scenario should
+# ever actually have to wait out. Both are optional, backward-compatible
+# calibrationYAML keys (see step2.DEFAULT_MAX_LATCH_TIME_HOURS/step{3,4}.
+# DEFAULT_TIMEOUT_SECONDS) -- patching them here, alongside file_in_path/
+# cmssw_base_path below, is what actually fixes "a calibration that never
+# gets matching files for a scenario's run sits waiting/deferred for hours"
+# rather than leaving it as a solution-internal constant the test setup has
+# no way to influence. Overridable for a scenario that deliberately wants a
+# longer window (e.g. testing the give-up-and-finalize path itself).
+FAST_MAX_LATCH_TIME_HOURS = float(os.environ.get("NGT_TEST_MAX_LATCH_TIME_HOURS", 0.25))  # 15 min
+FAST_STEP_TIMEOUT_SECONDS = float(os.environ.get("NGT_TEST_STEP_TIMEOUT_SECONDS", 900))  # 15 min
+
 
 def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -71,6 +85,9 @@ def cmd_setup(_args):
         data = yaml.safe_load(src.read_text(encoding="utf-8"))
         data["file_in_path"] = str(NGT_DEV_HOME / "eos" / calib) + "/"
         data["step_4_config"]["cmssw_base_path"] = str(NGT_DEV_HOME / "cmssw_home") + "/"
+        data["step_2_config"]["maxLatchTimeHours"] = FAST_MAX_LATCH_TIME_HOURS
+        data["step_3_config"]["timeoutSeconds"] = FAST_STEP_TIMEOUT_SECONDS
+        data["step_4_config"]["timeoutSeconds"] = FAST_STEP_TIMEOUT_SECONDS
         (CALIB_YAML_DIR / f"{calib}.yaml").write_text(
             yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
         )

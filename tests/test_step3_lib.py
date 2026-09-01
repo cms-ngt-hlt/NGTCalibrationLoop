@@ -10,12 +10,24 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ngt_calibration_loop import shell, step3
 
 CALIBRATION = "EcalPedestals"
 WITNESS_SUFFIX = "ecalPedsStep2_job.txt"
 ROOT_SUFFIX = "ecalPedsStep2.root"
+
+
+def _patch_calib_yaml(isolated_env, calibration, **step_3_config_overrides):
+    """Merge `step_3_config_overrides` into the copied calibrationYAML/
+    {calibration}.yaml -- e.g. timeoutSeconds, same as scenario-player/seed.py's
+    cmd_setup patches it for the live-test setup (see step3.py's
+    DEFAULT_TIMEOUT_SECONDS)."""
+    path = isolated_env.calib_yaml_dir / f"{calibration}.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["step_3_config"].update(step_3_config_overrides)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def _run_dir(isolated_env, run_number):
@@ -131,6 +143,23 @@ def test_no_new_files_timeout_expired_moves_to_final_even_if_run_ongoing(isolate
 
     decision = step3.check_files_for_processing(ctx)
 
+    assert decision.action == "final"
+
+
+def test_timeout_seconds_is_configurable_per_calibration(isolated_env):
+    """See test_step2_lib.py's equivalent test / step3.py's
+    DEFAULT_TIMEOUT_SECONDS for why the live-test setup needs this."""
+    _patch_calib_yaml(isolated_env, CALIBRATION, timeoutSeconds=5)
+
+    run_dir = _run_dir(isolated_env, 398600)
+    run_dir.mkdir(parents=True)
+    ctx = step3.build_run_context(CALIBRATION, "398600")
+    assert ctx.timeout_seconds == 5
+
+    # 1 minute old: past the tiny 5s override, but well inside the 9h
+    # production default -- proves the override actually governs this.
+    ctx.start_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+    decision = step3.check_files_for_processing(ctx)
     assert decision.action == "final"
 
 
