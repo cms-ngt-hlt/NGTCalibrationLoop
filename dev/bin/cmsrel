@@ -1,0 +1,10 @@
+#!/bin/bash
+# (FAKE) stand-in for scram's `cmsrel` -- just creates the release dir tree the
+# generated job scripts expect to `cd` into, so they don't abort at that step.
+set -e
+if [ -z "$1" ]; then
+    echo "(FAKE) cmsrel: missing CMSSW version argument" >&2
+    exit 1
+fi
+mkdir -p "$1/src"
+echo "(FAKE) cmsrel: created $1/src (relative to $(pwd))"
