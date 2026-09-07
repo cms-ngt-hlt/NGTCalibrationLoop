@@ -144,6 +144,32 @@ def test_last_ls_run_number_returns_zero_when_run_not_found():
     assert oms.last_ls_run_number(398600) == 0
 
 
+# --- oms.run_end_time (used by airflow_automation/airflow_dags/triggers.py's NewFileTrigger, not
+# by step2.py itself -- see that module's docstring) -----------------------
+
+
+def test_run_end_time_returns_none_while_running():
+    now = datetime.now(timezone.utc)
+    omsapi.configure_runs([make_run(398600, start_time=now - timedelta(hours=1), end_time=None)])
+    assert oms.run_end_time(398600) is None
+
+
+def test_run_end_time_returns_parsed_end_time():
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    omsapi.configure_runs([make_run(398600, start_time=now - timedelta(hours=1), end_time=now)])
+    assert oms.run_end_time(398600) == now
+
+
+def test_run_end_time_returns_none_on_oms_outage():
+    omsapi.set_failure(True)
+    assert oms.run_end_time(398600) is None
+
+
+def test_run_end_time_returns_none_when_run_not_found():
+    omsapi.configure_runs([make_run(111111, start_time=datetime.now(timezone.utc))])
+    assert oms.run_end_time(398600) is None
+
+
 # --- LS discovery against (fake) EOS -----------------------------------------------
 
 

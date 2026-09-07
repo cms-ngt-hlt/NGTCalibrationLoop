@@ -87,6 +87,34 @@ def daq_is_running(run_number):
     return is_running, last_ls
 
 
+def run_end_time(run_number):
+    """Query OMS for a run's end_time, parsed to a datetime -- or None if the
+    run is still running, can't be found, or OMS is unreachable.
+
+    Standalone and additive: doesn't change daq_is_running's existing
+    signature/behavior. Used by airflow_automation/airflow_dags/triggers.py's NewFileTrigger to
+    decide, independently of step2.check_ls_for_processing's own (run-start-
+    relative) give-up timer, when a run that has already ended has been over
+    long enough that a file-detector should stop waiting on files that are
+    never coming -- see that module's docstring for why this decision lives
+    there rather than in step2.py.
+    """
+    omsapi = OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
+    q = omsapi.query("runs")
+    q.filter("run_number", run_number)
+    try:
+        response = q.data().json()
+    except Exception as e:
+        logging.warning(f"OMS query for run {run_number}'s end_time failed: {e}.")
+        return None
+    if not response.get("data"):
+        return None
+    end_time_raw = response["data"][0]["attributes"].get("end_time")
+    if not end_time_raw:
+        return None
+    return datetime.fromisoformat(end_time_raw.replace("Z", "+00:00"))
+
+
 def find_new_run(calib_config, data_base_path, calibration_name, max_latch_time_hours, min_ls_to_process):
     """Search OMS for a new PROTONS/collisions run to latch onto.
 
