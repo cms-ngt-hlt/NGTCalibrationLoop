@@ -28,6 +28,18 @@ from . import config, eos, oms, shell
 MINIMUM_LS_PER_BATCH = 1
 MAXIMUM_LS_PER_JOB = 1
 
+# How long to keep latching-onto/waiting-on a run before giving up on it
+# regardless of file counts (see _still_have_time/_run_has_ended_and_files_
+# are_ready below) -- 8h is the right default for a real run against real
+# OMS/EOS, but is deliberately overridable per calibration
+# (step_2_config.maxLatchTimeHours) so a live-test setup can make a run that
+# will genuinely never receive files for some calibration (e.g. a scenario
+# that only seeds one calibration's EOS files) reach "final" in minutes
+# rather than genuinely waiting out the production default -- see
+# scenario-player/seed.py's cmd_setup, which patches this into the scratch calibrationYAML
+# copies specifically for that reason.
+DEFAULT_MAX_LATCH_TIME_HOURS = 8.0
+
 PROCESSED_LOG_NAME = "allLSProcessed.log"
 EXPECTED_OUTPUTS_LOG_NAME = "expectedOutputs.log"
 RUN_END_LOG_NAME = "runEnd.log"
@@ -43,7 +55,7 @@ class RunContext:
     working_dir: Path
     calib_config: dict
     ngt_params: dict
-    max_latch_time_hours: float = 8.0
+    max_latch_time_hours: float = DEFAULT_MAX_LATCH_TIME_HOURS
     min_ls_to_process: int = 1
 
 
@@ -70,10 +82,11 @@ def find_new_run(calibration_name):
     calib_config = config.load_calibration_config(calibration_name)
     data_base_path = ngt_params.get("DATA_BASE_PATH", "/data/ngt")
     min_ls_to_process = calib_config["step_2_config"]["minLsToProcess"]
+    max_latch_time_hours = calib_config["step_2_config"].get("maxLatchTimeHours", DEFAULT_MAX_LATCH_TIME_HOURS)
 
     latched = oms.find_new_run(
         calib_config, data_base_path, calibration_name,
-        max_latch_time_hours=8, min_ls_to_process=min_ls_to_process,
+        max_latch_time_hours=max_latch_time_hours, min_ls_to_process=min_ls_to_process,
     )
     if latched is None:
         return None
@@ -111,6 +124,13 @@ def build_run_context(calibration_name, run_number):
         working_dir=working_dir,
         calib_config=calib_config,
         ngt_params=ngt_params,
+        # Previously this was never passed here at all, so ctx.max_latch_time_hours
+        # silently fell back to RunContext's own dataclass default regardless of
+        # what find_new_run (above) actually used -- harmless while both were the
+        # same hardcoded 8, but a latent inconsistency now that it's configurable.
+        max_latch_time_hours=calib_config["step_2_config"].get(
+            "maxLatchTimeHours", DEFAULT_MAX_LATCH_TIME_HOURS
+        ),
         min_ls_to_process=calib_config["step_2_config"]["minLsToProcess"],
     )
 

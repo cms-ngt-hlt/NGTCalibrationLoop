@@ -30,7 +30,10 @@ from typing import Optional
 from . import config, shell
 
 MINIMUM_FILES_PER_BATCH = 1
-TIMEOUT_SECONDS = 8 * 60 * 60
+# Overridable per calibration (step_4_config.timeoutSeconds) -- see
+# step2.py's DEFAULT_MAX_LATCH_TIME_HOURS for why a live-test setup needs that.
+DEFAULT_TIMEOUT_SECONDS = 8 * 60 * 60
+TIMEOUT_SECONDS = DEFAULT_TIMEOUT_SECONDS  # kept for backward-compat imports/tests
 
 PROCESSED_LOG_NAME = "allStep3FilesProcessed.log"
 RUN_END_LOG_NAME = "runEnd.log"
@@ -47,6 +50,7 @@ class RunContext:
     ngt_params: dict
     cmssw_path: str
     cond_auth_path: str
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
 
 @dataclass
@@ -111,6 +115,7 @@ def build_run_context(calibration_name, run_number):
         ngt_params=ngt_params,
         cmssw_path=cmssw_path,
         cond_auth_path=cond_auth_path,
+        timeout_seconds=calib_config["step_4_config"].get("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS),
     )
 
 
@@ -118,9 +123,9 @@ def _run_is_not_complete(working_dir):
     return not (Path(working_dir) / RUN_END_LOG_NAME).exists()
 
 
-def _still_have_time(start_time):
+def _still_have_time(start_time, timeout_seconds):
     diff = datetime.now(timezone.utc) - start_time
-    return diff.total_seconds() <= TIMEOUT_SECONDS
+    return diff.total_seconds() <= timeout_seconds
 
 
 def load_already_processed(working_dir):
@@ -159,7 +164,7 @@ def check_files_for_processing(ctx: RunContext):
     if waiting and files_to_process and enough_files:
         return CycleDecision(action="batch", files_to_process=files_to_process)
 
-    if _run_is_not_complete(ctx.working_dir) and _still_have_time(ctx.start_time):
+    if _run_is_not_complete(ctx.working_dir) and _still_have_time(ctx.start_time, ctx.timeout_seconds):
         return CycleDecision(action="wait", files_to_process=files_to_process)
 
     return CycleDecision(action="final", files_to_process=files_to_process)
