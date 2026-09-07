@@ -1,0 +1,33 @@
+# One real LHC run -- there is only ever one active at a time across the
+# whole of CMS, never two different run numbers concurrently (see
+# per_file_scheduling_design.md's "Why defer" section and
+# scenario-player/scenario_player.py's own docstring for why build_timeline rejects a
+# scenario that schedules two overlapping run numbers) -- but its
+# lumisections feed multiple calibrations at once, since RAW data from a
+# single run underlies every calibration stream. `calibrations` (a list)
+# plays the same run-start/LS-arrival/run-end timeline once per listed
+# calibration, sharing one run number, but writes each calibration's own fake
+# EOS files (each has its own file_in_path). This is the physically sensible
+# way to model "multiple calibrations processing concurrently" -- not
+# multiple run numbers overlapping in time, which the earlier version of this
+# file did.
+#
+# BeamSpot is deliberately not listed -- it gets no lumisections in this
+# scenario. Its own run_detector/file_detector still eagerly latches onto
+# this run regardless (oms.find_new_run doesn't gate latching on files
+# existing for a *different* calibration), then just waits until it gives up
+# -- a good way to exercise that path; see per_file_scheduling_design.md 3
+# for why that's a bounded (not hours-long) cost in the live-test setup.
+#
+# Play with:
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/concurrent_multi_calibration.yaml
+runs:
+  - calibrations: [EcalPedestals, SiStripBad]
+    run: 398800
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20

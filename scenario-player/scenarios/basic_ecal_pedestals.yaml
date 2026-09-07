@@ -1,0 +1,16 @@
+# Single run, single calibration -- the same shape as the manual walkthrough
+# in airflow_automation/airflow_demo/perfile_interactive_demo.sh (starting at LS 51), just
+# expressed as a replayable timeline instead of typed commands.
+#
+# Play with:
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+runs:
+  - calibrations: [EcalPedestals]
+    run: 398600
+    start_offset: 0
+    minutes_ago: 2
+    lumisections:
+      - {ls: 51, after: 0}    # present from the moment the run is seeded
+      - {ls: 52, after: 20}   # arrives 20s after LS 51
+      - {ls: 53, after: 20}   # arrives 20s after LS 52
+    end_after: 30              # run ends 30s after its last lumisection

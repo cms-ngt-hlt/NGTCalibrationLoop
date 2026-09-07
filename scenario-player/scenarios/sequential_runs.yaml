@@ -1,0 +1,30 @@
+# Two runs, back to back, never overlapping in time (see
+# concurrent_multi_calibration.yaml's comment, and scenario-player/scenario_player.py's
+# own docstring, for why a scenario can't have two different run numbers
+# active at once) -- exercises run_detector correctly latching a fresh run
+# immediately after the previous one has fully finished, and the same
+# calibration's processing chain (run_detector -> file_detector -> process)
+# running twice, independently, one after the other.
+#
+# Play with:
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/sequential_runs.yaml
+runs:
+  - calibrations: [EcalPedestals, SiStripBad, BeamSpot]
+    run: 700501
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20                # run 398601 ends at t=+65s
+
+  - calibrations: [EcalPedestals, SiStripBad, BeamSpot]
+    run: 700502
+    start_offset: 70             # starts 5s after run 398601 has fully ended
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20
