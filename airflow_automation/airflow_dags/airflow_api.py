@@ -17,7 +17,7 @@ Airflow about *other* DAG runs -- see "Upgrading to Airflow 3" and the public
 API docs.
 
 This is also a natural seam for the "engine-agnostic live test setup" this
-project is working towards (see dev/sim_setup.sh): everything Airflow-shaped
+project is working towards (see scenario-player/sim_env.sh): everything Airflow-shaped
 is isolated to this one small file, callable over plain HTTP, rather than
 spread through the DAG files as direct internal-API/ORM calls.
 
@@ -82,5 +82,18 @@ def trigger_dag_run(dag_id, run_id, conf):
     these are self-retriggering/handoff runs with no natural schedule
     interval, exactly the "manual run with no logical date" case Airflow 3
     made a first-class option for (see the "Upgrading to Airflow 3" notes on
-    manual-run data_interval no longer being derived from logical_date)."""
-    return _post(f"/api/v2/dags/{dag_id}/dagRuns", {"dag_run_id": run_id, "conf": conf, "logical_date": None})
+    manual-run data_interval no longer being derived from logical_date).
+
+    Returns the created DagRun's data, or None if a DagRun with this exact
+    run_id already exists (Airflow rejects the duplicate with 409, treated
+    here as an idempotent no-op rather than an error). ngt_dags_per_file.py
+    relies on it: it dedupes per-file dispatch by giving each (calibration,
+    run, file) a deterministic run_id instead of pre-checking DagRun history,
+    so a file-detector cycle that (re-)discovers the same file is safe to just
+    call this again."""
+    try:
+        return _post(f"/api/v2/dags/{dag_id}/dagRuns", {"dag_run_id": run_id, "conf": conf, "logical_date": None})
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 409:
+            return None
+        raise

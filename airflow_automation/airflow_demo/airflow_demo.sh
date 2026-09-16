@@ -68,8 +68,13 @@ Running Airflow (one shared instance, tmux sessions NGTAirflow*):
   ui                                      Print the Airflow UI URL
   logs <scheduler|dag-processor|api|triggerer>   Tail -f that process's tmux console log
 
+DAG control:
+  unpause-perfile                         Unpause ngt_dags_per_file.py's 5 DAGs (all calibrations)
+  pause-perfile                           Pause them again
+
 Resetting state (see scenario-player/sim_env.sh's setup/reset for the simulator's OWN state --
 \$NGT_DEV_HOME -- which none of these touch, except reset-scenario):
+  reset-perfile                           Clear DAG-run history for ngt_dags_per_file.py's 5 DAGs
   reset-airflow                           Full reset: drop + recreate the whole metadata DB
                                           (both designs' history, variables, connections --
                                           everything) and re-migrate. Back to freshly-installed.
@@ -129,6 +134,13 @@ demo_env_exports() {
   # pip-installs tests/stubs (a real, tiny installable package) directly into
   # ~/airflow3-ngt-venv, so `import omsapi` resolves normally everywhere
   # without relying on subprocess environment propagation.
+  # NGT_FILE_DETECTOR_RUN_END_GRACE_SECONDS: read by ngt_dags_per_file.py's
+  # wait_for_files task (which runs in the triggerer -- this block reaches
+  # it too, start_component uses it for all four processes uniformly).
+  # Production default (triggers.DEFAULT_RUN_END_GRACE_SECONDS) is 30 min;
+  # 20s here is comfortably above NGT_LOOP_SLEEP_SECONDS/NGT_FILE_POLL_SECONDS
+  # (10s/5s) without racing a normal in-flight cycle, so a scenario's
+  # end-run resolves in seconds instead of minutes.
   cat <<ENV
 export NGT_PARAMETERS_PATH="$NGT_DEV_HOME/ngtParameters.jsn"
 export NGT_CALIBRATION_YAML_DIR="$NGT_DEV_HOME/calibrationYAML"
@@ -136,6 +148,7 @@ export NGT_OMS_STUB_RUNS_FILE="$NGT_DEV_HOME/oms_runs.json"
 export NGT_OMS_STUB_FAULTS_FILE="$NGT_DEV_HOME/faults/oms.json"
 export NGT_FAULTS_DIR="$NGT_DEV_HOME/faults"
 export NGT_LOOP_SLEEP_SECONDS="${NGT_LOOP_SLEEP_SECONDS:-10}"
+export NGT_FILE_DETECTOR_RUN_END_GRACE_SECONDS="${NGT_FILE_DETECTOR_RUN_END_GRACE_SECONDS:-20}"
 export PATH="$NGT_DEV_HOME/bin:\$PATH"
 ENV
 }
@@ -219,6 +232,36 @@ cmd_stop() {
   done
 }
 
+cmd_pause_unpause_perfile() {
+  # No calibration argument needed: covers all calibrations in one call.
+  # run_detector/file_detector are each one generic DAG (calibration comes
+  # from trigger conf, not the DAG definition -- see ngt_dags_per_file.py's
+  # module docstring), but process is one DAG *per* calibration
+  # (ngt_perfile_process_<calibration>) so it appears separately in the UI --
+  # loop over CALIBRATIONS for those specifically.
+  local action="$1"
+  activate_venv
+  for dag_id in ngt_perfile_run_detector ngt_perfile_file_detector; do
+    airflow dags "$action" -y "$dag_id"
+  done
+  for calibration in "${CALIBRATIONS[@]}"; do
+    local lower; lower="$(echo "$calibration" | tr '[:upper:]' '[:lower:]')"
+    airflow dags "$action" -y "ngt_perfile_process_${lower}"
+  done
+}
+
+cmd_reset_perfile() {
+  activate_venv
+  for dag_id in ngt_perfile_run_detector ngt_perfile_file_detector; do
+    airflow dags delete -y "$dag_id"
+  done
+  for calibration in "${CALIBRATIONS[@]}"; do
+    local lower; lower="$(echo "$calibration" | tr '[:upper:]' '[:lower:]')"
+    airflow dags delete -y "ngt_perfile_process_${lower}"
+  done
+  echo "Cleared DAG-run history for all 5 ngt_perfile_* DAGs (ngt_dags_per_file.py)."
+}
+
 cmd_reset_airflow() {
   # Drops and recreates the whole metadata DB schema -- both designs' DAG-run
   # history, variables, connections, everything -- not just this repo's DAGs.
@@ -289,6 +332,9 @@ case "${1:-}" in
   status) cmd_status ;;
   ui) cmd_ui ;;
   logs) cmd_logs "${2:?scheduler, dag-processor, or api required}" ;;
+  unpause-perfile) cmd_pause_unpause_perfile unpause ;;
+  pause-perfile) cmd_pause_unpause_perfile pause ;;
+  reset-perfile) cmd_reset_perfile ;;
   reset-airflow) cmd_reset_airflow ;;
   reset-scenario) cmd_reset_scenario ;;
   seed-run)

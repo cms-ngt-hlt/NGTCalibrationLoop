@@ -111,20 +111,6 @@ def isolated_env(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def popen_calls(monkeypatch):
-    """Replace subprocess.Popen everywhere with a recorder, so tests never try to
-    actually launch cmsDriver/cmsRun/uploadConditions.py. Returns the list of
-    recorded calls (each a dict with "cmd" and "kwargs")."""
-    import subprocess
-
-    from support.fake_subprocess import FakePopen
-
-    calls = []
-    monkeypatch.setattr(subprocess, "Popen", FakePopen(calls))
-    return calls
-
-
-@pytest.fixture
 def job_runner(monkeypatch):
     """Replace ngt_calibration_loop.shell.run_job_script with a recorder, so
     tests never try to actually launch cmsDriver/cmsRun/uploadConditions.py.

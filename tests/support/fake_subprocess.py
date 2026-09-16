@@ -1,7 +1,10 @@
 """
 Test doubles for the external CLI tools the calibration loop shells out to
-(edmFileUtil, xrdfs, cmsDriver.py-generated bash scripts) so the FSM logic can be
+(edmFileUtil, xrdfs) so ngt_calibration_loop's processing logic can be
 exercised without EOS access, CMSSW, or any real subprocess execution.
+Job-script launches (cmsDriver.py-generated bash scripts) are mocked
+separately -- see conftest.py's `job_runner` fixture, which replaces
+ngt_calibration_loop.shell.run_job_script directly.
 """
 
 import subprocess
@@ -66,23 +69,3 @@ def make_fake_run(fake_eos, prefix="root://eoscms.cern.ch/"):
         raise AssertionError(f"Unexpected subprocess.run call in test: {cmd!r}")
 
     return fake_run
-
-
-class FakePopen:
-    """Records subprocess.Popen launch attempts instead of actually spawning a
-    cmsDriver/cmsRun/uploadConditions.py job. Appends each call's (cmd, kwargs) to
-    the shared `calls` list passed at construction time."""
-
-    def __init__(self, calls):
-        self.calls = calls
-
-    def __call__(self, cmd, **kwargs):
-        self.calls.append({"cmd": cmd, "kwargs": kwargs})
-        return _FakeProcessHandle()
-
-
-class _FakeProcessHandle:
-    pid = 424242
-
-    def poll(self):
-        return None

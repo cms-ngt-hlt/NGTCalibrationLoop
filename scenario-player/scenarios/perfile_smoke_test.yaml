@@ -1,0 +1,12 @@
+# Quick smoke-test scenario for verifying ngt_dags_per_file.py specifically:
+# one SiStripBad run (minLsToProcess: 1, so it doesn't need many LS to become
+# eligible) with a few lumisections trickling in.
+runs:
+  - calibrations: [SiStripBad]
+    run: 500201
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 8}
+      - {ls: 3, after: 8}
+    end_after: 10
