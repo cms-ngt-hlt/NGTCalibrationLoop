@@ -185,6 +185,217 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
         └── ...
 ```
 
+## Running the FSM logic locally / tests
+
+The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
+state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
+via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
+(they default to those same production paths, so deployment behavior is unchanged),
+and each script now guards its argument parsing / main loop behind
+`if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
+launching anything.
+
+To set up a local environment and run the test suite:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests in `tests/` mock every external dependency:
+- OMS REST API -> `tests/stubs/omsapi` (an in-memory fake of the query-builder
+  interface `NGTLoopStep2.py` uses; the real `oms-api-client` isn't installed for
+  tests, only for production deploys per the instructions above)
+- `edmFileUtil` / `xrdfs` (EOS access) -> `tests/support/fake_subprocess.FakeEOS`
+- `cmsDriver.py` / `cmsRun` / `uploadConditions.py` -> never actually invoked;
+  `subprocess.Popen` is replaced with a recorder, so "launching a job" just records
+  what would have run
+- filesystem paths -> redirected into a pytest `tmp_path` via the
+  `NGT_PARAMETERS_PATH` / `NGT_CALIBRATION_YAML_DIR` env vars each script reads
+
+No network access, CMSSW, or CERN-internal hosts are required to run the suite.
+
+## Running a live demo of the loops (no CERN infra needed)
+
+For watching the actual FSM processes run -- not just pytest -- `scenario-player/live_demo.sh`
+launches real `NGTLoopStep2/3/4.py` processes (one per tmux session) against a fake
+OMS/EOS/CMSSW toolchain in `scenario-player/bin/` (fake `cmsDriver.py`, `cmsRun`, `edmFileUtil`,
+`xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`). Everything runs for real --
+real state transitions, real generated job scripts, real output files flowing from
+Step 2 through Step 3 to a fake Step 4 upload -- entirely offline.
+
+```bash
+./scenario-player/live_demo.sh setup                                  # create ./demo-env scratch env
+./scenario-player/live_demo.sh start-all EcalPedestals                 # launch all 3 steps in tmux
+./scenario-player/live_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
+tmux attach -t NGTDemo2_EcalPedestals                       # watch it react (Ctrl-b d to detach)
+./scenario-player/live_demo.sh add-ls EcalPedestals 398600 53           # simulate a new lumisection arriving
+./scenario-player/live_demo.sh end-run 398600                           # simulate the run ending
+./scenario-player/live_demo.sh status                                   # list running sessions
+./scenario-player/live_demo.sh stop-all EcalPedestals                   # tear down
+```
+
+For a guided, narrated walkthrough of all of the above -- runs `setup`, launches all
+three steps, seeds a couple of runs (a few lumisections each, seeded incrementally),
+and after every command shows you the relevant output directories/files so you can
+see each state machine actually doing something, pausing between steps -- use:
+```bash
+./scenario-player/interactive_demo.sh                                    # 2 runs, 2 LS each, EcalPedestals
+./scenario-player/interactive_demo.sh --calibration SiStripBad --runs 3 --ls-per-run 4
+./scenario-player/interactive_demo.sh --yes                               # don't pause between steps
+```
+
+Run `./scenario-player/live_demo.sh` with no arguments for the full command list. All state
+lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
+this repo) -- delete it any time to reset the demo environment.
+
+Two settings are overridable via environment variables:
+
+| Variable                 | Default                              | Meaning                          |
+|---------------------------|--------------------------------------|-----------------------------------|
+| `NGT_DEV_HOME`             | `./demo-env`                         | scratch state directory           |
+| `NGT_LOOP_SLEEP_SECONDS`   | `5` (production default: `60`)       | Step 3/4 poll interval, seconds   |
+
+e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./scenario-player/live_demo.sh setup`. `NGT_DEV_HOME` is read
+at `setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup`
+after changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh each time a loop is
+started (`start2` / `start3` / `start4` / `start-all`).
+
+## The `ngt_calibration_loop` library
+
+The decision logic of the three loops -- OMS/EOS querying, run latching, lumisection/file
+batching and timeouts, cmsDriver script preparation -- is also available as plain functions with
+no orchestration dependency in `ngt_calibration_loop/` (`step2.py`/`step3.py`/`step4.py` hold
+each step's logic; `config.py`, `oms.py`, `eos.py` and `shell.py` are shared helpers). They keep
+their state on disk instead of in memory, and Step 3/4 job directories are named from a content
+hash of their input files (`alcaPromptJob_<hash>`, `harvestJob_<hash>`) instead of a counter, so
+a retried job reproduces the same directory instead of double-submitting.
+`shell.run_job_script` is the one seam that actually launches a job script, blocking until it
+completes (the FSM scripts' `subprocess.Popen(...)` never checked the result). `oms.run_end_time`
+asks OMS directly for a run's end time. Three give-up timers (`step_2_config.maxLatchTimeHours`,
+`step_3_config`/`step_4_config.timeoutSeconds`) can be overridden by optional calibrationYAML keys
+-- absent in the production calibrationYAML, so production behavior is unaffected.
+
+### Tests of the library and the simulator
+
+The same mocks as above apply, except that job launches are intercepted one level down:
+
+- `tests/test_step{2,3,4}_lib.py` -- exercise `ngt_calibration_loop`'s functions directly: run
+  latching, batching thresholds, timeout/run-ended escape hatches, job prep/launch, and that a
+  failed launch raises so a caller can retry. `ngt_calibration_loop.shell.run_job_script` is
+  replaced by the `job_runner` fixture, a recorder that can also be told to raise on demand
+  (`job_runner.queue_failure()`).
+- `tests/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building
+  (ordering, concurrent-run merging) and playback (event firing order/arguments), with
+  `scenario-player/seed.py`'s functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access
+  needed.
+- `tests/test_faults.py`, `tests/test_job_faults.py`, `tests/test_oms_faults.py` -- the
+  declarative fault vocabulary (see "Fault injection" below).
+
+## The offline simulator (`scenario-player/`)
+
+`scenario-player/` holds everything needed to simulate a live run without CERN infrastructure:
+`sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and `scenario_player.py`
+(driving/replaying fake runs, with `scenarios/*.yaml`), `faults.py` (the shared fault-injection
+vocabulary) and `bin/` (the fake `cmsRun`/`cmsDriver.py`/`edmFileUtil`/`xrdfs`/... toolchain).
+None of it imports or knows about a specific orchestration engine, so whatever runs the steps can
+be pointed at the same `$NGT_DEV_HOME`. It is not a Python package (hence the hyphen):
+`faults.py`, `seed.py` and `scenario_player.py` are top-level modules found via `sys.path`
+(`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh` for the fake `omsapi`'s live fault path).
+
+### Scripting a timed sequence of runs/lumisections
+
+`seed.py`'s `seed-run`/`add-ls`/`end-run` are one-shot commands, handy for typing out by hand.
+For an unattended, repeatable test -- or to exercise several calibrations processing
+concurrently, which is awkward to type out live -- `scenario-player/scenario_player.py` plays
+back a whole timeline from a declarative YAML file instead:
+
+```bash
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml            # real-time
+python3 scenario-player/scenario_player.py scenario-player/scenarios/concurrent_multi_calibration.yaml --speed 5
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml --dry-run  # print the
+                                                                                   # resolved
+                                                                                   # timeline only
+```
+
+A scenario lists one or more runs, each with a start offset and a sequence of lumisections
+separated by delays (`after: N` seconds since the previous event in that run); multiple runs'
+events are merged into one global timeline by absolute time. A run is one CMS-wide DAQ run --
+there's only ever one active at a time across the whole experiment, so `build_timeline` rejects
+a scenario whose runs overlap in time -- but its lumisections can feed several calibrations at
+once, since one run's RAW data underlies every calibration stream: each run entry takes a
+`calibrations` list (always a list, even for one calibration), and the timeline plays the same
+start/LS-arrival/end sequence once per listed calibration while sharing that one run number (see
+`scenario-player/scenarios/concurrent_multi_calibration.yaml`). See
+`scenario-player/scenarios/*.yaml` for more worked examples and
+`scenario-player/scenario_player.py`'s module docstring for the full format description. Run
+numbers must be exactly six digits: the fake `edmFileUtil` parses `run<RUN6DIGIT>_ls<LS>` names
+and skips anything else.
+
+This is the same engine-agnostic layer `seed.py` is (it calls `seed.py`'s functions directly and
+imports no orchestration engine), so any orchestrator pointed at the same `$NGT_DEV_HOME` reacts
+to the same scenario files unchanged.
+
+### Fault injection
+
+The three riskiest external dependencies can be made to fail on purpose, with realistic error
+text so a failure is debuggable: OMS (`connection_error`, `timeout`, `http_error` with a status,
+`malformed_json`), `cmsRun` and `uploadConditions.py` (`exit_code`). The vocabulary (`FaultSpec`,
+in `scenario-player/faults.py`) is shared by two backends: pytest applies it in-process through
+the `inject_fault` fixture and `tests/stubs/omsapi`'s `set_failure()`; the live workflow -- a
+separate OS process from whatever is running the loops -- arms it by writing JSON under
+`$NGT_DEV_HOME/faults/<target>.json`, which the fake `omsapi`, `bin/cmsRun` and
+`bin/uploadConditions.py` poll and consume. From a scenario file, a top-level `faults:` list arms
+faults at scheduled points on the same timeline (see
+`scenario-player/scenarios/fault_injection_demo.yaml`); by hand:
+
+```bash
+python3 scenario-player/seed.py arm-fault --target oms --mode connection_error --times 2
+python3 scenario-player/seed.py arm-fault --target cmsrun --mode exit_code --exit-code 139 \
+    --calibration EcalPedestals --step step2
+python3 scenario-player/seed.py list-faults
+python3 scenario-player/seed.py clear-faults
+```
+
+### Resetting the simulator's state and the give-up timers
+
+All simulator state lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory
+inside this repo):
+
+```bash
+./scenario-player/sim_env.sh reset   # wipes $NGT_DEV_HOME entirely
+./scenario-player/sim_env.sh setup   # recreates it (needs an active venv -- see note below)
+```
+
+`setup`'s `pip install -e tests/stubs` step needs **some** Python venv active first -- without
+one, Debian/Ubuntu's system Python refuses the install outright (PEP 668,
+`error: externally-managed-environment`); forgetting this fails fast with a clear message
+telling you to `source .../activate` first.
+
+**Caution**: `./scenario-player/sim_env.sh reset` deletes `$NGT_DEV_HOME` unconditionally, with
+no awareness of whether a process is currently running against it. Doing this while an engine
+has in-flight work polling paths under `$NGT_DEV_HOME` can leave that work stuck, and silently
+orphans the engine processes' own console logs (they keep writing to the now-unlinked files).
+Stop whatever is running against the environment first.
+
+`setup` also patches the give-up timers of the scratch calibrationYAML copies (see "The
+`ngt_calibration_loop` library"):
+
+| Variable                          | Default                          | Meaning                          |
+|-------------------------------------|-----------------------------------|-----------------------------------|
+| `NGT_TEST_MAX_LATCH_TIME_HOURS`      | `0.25` (production default: `8`) | how long a calibration keeps waiting on a run before giving up, hours |
+| `NGT_TEST_STEP_TIMEOUT_SECONDS`      | `900` (production default: `28800`/`32400`) | same, for Step 3/Step 4's own give-up timers, seconds |
+
+Why they exist: step2/3/4 each wait up to several *production* hours (8h/9h/8h) before giving
+up on a run/calibration that never reconciles -- correct for real OMS/EOS, but not something a
+live-test scenario should ever have to wait out (a scenario that seeds files for only one
+calibration still latches all three onto the same OMS-visible run, so the other two would
+otherwise wait for hours). The defaults (15 min) are deliberately well above any realistic
+scenario duration -- shortening them further risks a still-live, still-progressing run's own
+workflow getting force-finalized mid-scenario. Override either one to test the
+give-up-and-finalize path itself, or to give a deliberately long-running scenario more headroom.
+
 ## Nota Bene
 There are quite a lot of issues remaining, still. The version we are at right now is the "functioning" version that was used for the demonstrator in the 2025 data taking. However, for 2026 data-taking, we plan to improve and have worked on all the issues. 
 
