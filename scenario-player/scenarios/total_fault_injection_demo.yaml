@@ -1,0 +1,56 @@
+# Demonstrates the `faults:` section (see scenario-player/faults.py and
+# scenario-player/scenario_player.py's module docstring) against a single EcalPedestals
+# run -- one fault per target (oms / cmsrun / upload_conditions), each armed
+# at a different point on the same timeline used to seed runs/lumisections.
+#
+# Run number 400001 is deliberately unused by any other scenario-player/scenarios/*.yaml
+# file, so this scenario's Airflow-UI/log output is never confused with
+# another one's while both might be live-tested around the same time.
+#
+# What to expect while watching Airflow (task logs / UI) as this plays:
+#   t=+5s   OMS connection errors twice (times: 2) -- daq_is_running/
+#           last_ls_run_number fall back to their safe defaults (see
+#           tests/test_oms_faults.py); find_new_run is unaffected (it never
+#           filters by run_number, so this run-scoped fault can't match it).
+#   t=+30s  OMS returns one HTTP 503 -- has NO visible effect on
+#           daq_is_running/last_ls_run_number/run_end_time, since none of
+#           them call raise_for_status(); documents that existing gap live.
+#   t=+45s  step2's cmsRun crashes once (exit 139, a segfault-style code) for
+#           this run specifically -- launch_job's retry policy (3 retries,
+#           2min exponential backoff, see airflow_automation/airflow_dags/_perfile_process.py's
+#           LAUNCH_RETRY_KWARGS) should retry and succeed on the next attempt.
+#   t=+150s upload_conditions.py returns exit code 1 once -- step4_upload's
+#           independent retry policy (5 retries, 1min backoff) should retry
+#           and succeed, without re-running the harvesting job.
+#
+# Play with (against a live `airflow_automation/airflow_demo/airflow_demo.sh setup && start`, per
+# README.md -- e.g. with only ngt_watch_* unpaused):
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/fault_injection_demo.yaml --dry-run
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/fault_injection_demo.yaml
+runs:
+  - calibrations: [EcalPedestals, SiStripBad]
+    run: 400001
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+    end_after: 20  
+
+faults:
+  - target: cmsrun
+    mode: exit_code
+    exit_code: 139
+    calibration: EcalPedestals
+    run: 400001
+    step: step2
+    at: 40
+    times: 6
+
+  - target: upload_conditions
+    mode: exit_code
+    exit_code: 1
+    calibration: EcalPedestals
+    run: 400001
+    at: 25
+    times: 6

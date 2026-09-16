@@ -6,12 +6,151 @@ Reads the `# FAKE_OUTPUTS=...` marker scenario-player/bin/cmsDriver.py wrote int
 python config and creates each listed output file in the current directory, so
 the calling bash script's `if cmsRun ...; then mv/touch ...` success path has
 real files to work with.
+
+Before doing any of that, checks $NGT_FAULTS_DIR/cmsrun.json (armed by
+scenario-player/seed.py's arm_fault(), called by scenario-player/scenario_player.py for a scenario's
+`faults:` entries, or directly via `airflow_automation/airflow_demo/airflow_demo.sh arm-fault`) for a
+still-armed, scope-matching simulated failure, and if one exists, prints a
+CMSSW-style "Fatal Exception" banner to stderr and exits with the configured
+code instead -- realistic enough that debugging it via the job's stdout/
+stderr log (or, for Step 4's unguarded `cmsRun` call, Airflow's own captured
+task log) is a reasonable stand-in for debugging a genuine CMSSW crash.
+Scope (calibration/run/step) is derived from the current working directory --
+see _scope_from_cwd -- since step2.py/step3.py/step4.py always run this job
+with cwd set to their own <calibration>/run<N>[/<jobDir>] working directory.
 """
+import fcntl
+import json
+import os
 import re
 import sys
+import tempfile
+
+
+def _scope_from_cwd():
+    """{calibration, run, step} derived from cwd: step2 runs directly in
+    <data_base_path>/<calibration>/run<N>/; step3/step4 nest a content-hashed
+    job dir (alcaPromptJob_*/harvestJob_*) one level deeper -- see
+    ngt_calibration_loop/step2.py's working_dir and step3.py/step4.py's
+    _job_dir_name."""
+    parts = os.getcwd().replace("\\", "/").rstrip("/").split("/")
+    scope = {"calibration": None, "run": None, "step": None}
+    for i, part in enumerate(parts):
+        m = re.match(r"^run(\d+)$", part)
+        if m:
+            scope["run"] = m.group(1)
+            if i > 0:
+                scope["calibration"] = parts[i - 1]
+            break
+    basename = parts[-1] if parts else ""
+    if re.match(r"^run\d+$", basename):
+        scope["step"] = "step2"
+    elif basename.startswith("alcaPromptJob_"):
+        scope["step"] = "step3"
+    elif basename.startswith("harvestJob_"):
+        scope["step"] = "step4"
+    return scope
+
+
+def _atomic_write_json(path, data):
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".tmp-fault-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _consume_fault(path, scope):
+    """Cross-process-safe read/match/decrement/write against one fault file.
+    Duplicated (stdlib-only, no ngt_calibration_loop import) from
+    scenario-player/faults.py's consume_fault/scope_matches, which
+    tests/stubs/omsapi uses instead -- this script must stay importable by a
+    bare $PATH lookup with nothing but the standard library installed, same
+    constraint as scenario-player/bin/cmsDriver.py."""
+    lock_path = path + ".lock"
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            if not os.path.exists(path):
+                return None
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                return None
+
+            for i, entry in enumerate(entries):
+                if all(
+                    entry.get(k) is None or str(entry[k]) == str(scope.get(k))
+                    for k in ("calibration", "run", "step")
+                ):
+                    matched = dict(entry)
+                    remaining = entry.get("times_remaining")
+                    if remaining is not None:
+                        remaining -= 1
+                        if remaining <= 0:
+                            entries.pop(i)
+                        else:
+                            entry["times_remaining"] = remaining
+                    _atomic_write_json(path, entries)
+                    return matched
+            return None
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def _check_fault():
+    faults_dir = os.environ.get("NGT_FAULTS_DIR")
+    if not faults_dir:
+        return None
+    return _consume_fault(os.path.join(faults_dir, "cmsrun.json"), _scope_from_cwd())
+
+
+# Real-looking canned detail per exit code, so an injected failure resembles
+# the genuine CMSSW error it's standing in for rather than a bare placeholder
+# -- overridable per-fault via the `message:` scenario YAML field.
+_CANNED_DETAIL = {
+    139: "A fatal system signal has occurred: segmentation violation",
+    134: "An OS signal was sent to the process: SIGABRT (signal 6)",
+    127: "cmsRun: command not found",
+}
+
+
+def _fatal_exception_banner(exit_code, message=None):
+    """Mimics CMSSW's real "Fatal Exception" banner (the format actual
+    cmsRun crashes print), for realistic-looking debugging practice."""
+    category = "FatalRootError" if exit_code in (139, 134) else "StdException"
+    detail = message or _CANNED_DETAIL.get(
+        exit_code, "(FAKE) simulated cmsRun failure -- injected by scenario-player/bin/cmsRun fault injection"
+    )
+    scope = _scope_from_cwd()
+    context = f"run: {scope['run']} calibration: {scope['calibration']}"
+    return (
+        "----- Begin Fatal Exception 14-Sep-2026 -----------------------\n"
+        f"An exception of category '{category}' occurred while\n"
+        f"   [0] Processing  {context}\n"
+        "   [1] Running path 'alcaHarvesting'\n"
+        "Exception Message:\n"
+        f"{detail}\n"
+        "----- End Fatal Exception -------------------------------------"
+    )
 
 
 def main():
+    fault = _check_fault()
+    if fault:
+        exit_code = fault.get("exit_code", 1)
+        print(f"(FAKE) cmsRun: injected failure (mode={fault['mode']}) -- exiting {exit_code}", file=sys.stderr)
+        print(_fatal_exception_banner(exit_code, fault.get("message")), file=sys.stderr)
+        sys.exit(exit_code)
+
     if len(sys.argv) < 2:
         print("(FAKE) cmsRun: expected a python config filename", file=sys.stderr)
         sys.exit(1)
