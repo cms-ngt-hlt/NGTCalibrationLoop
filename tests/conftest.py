@@ -29,15 +29,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
 STUBS_DIR = TESTS_DIR / "stubs"
 SCENARIO_PLAYER_DIR = REPO_ROOT / "scenario-player"
+AIRFLOW_AUTOMATION_DIR = REPO_ROOT / "airflow_automation"
 
 # Order matters: the stub omsapi must be found before any real one, and the repo
 # root must be importable so `import ngt_calibration_loop` works regardless of the
 # directory pytest was invoked from. scenario-player/ supplies the top-level
-# `faults`/`seed`/`scenario_player` modules -- it is not an installed package.
+# `faults`/`seed`/`scenario_player` modules and airflow_automation/ the
+# `airflow_dags` package -- neither directory is an installed package. (Because
+# tests/ is on sys.path, no test subdirectory may be named like an importable
+# package: tests/airflow/ would shadow `airflow` and break importorskip.)
 for path in (
     str(TESTS_DIR),
     str(STUBS_DIR),
     str(SCENARIO_PLAYER_DIR),
+    str(AIRFLOW_AUTOMATION_DIR),
     str(REPO_ROOT),
 ):
     if path not in sys.path:

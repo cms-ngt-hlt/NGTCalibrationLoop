@@ -1,6 +1,7 @@
 # Force LF everywhere, regardless of the checkout OS / core.autocrlf setting.
-# The scenario-player/ scripts and scenario-player/bin/ fake toolchain are invoked directly via their
-# shebang line on Linux (./scenario-player/interactive_demo.sh, ./scenario-player/bin/cmsrel, ...); CRLF
+# The airflow_automation/airflow_demo/ and scenario-player/ scripts (incl. the bin/ fake
+# toolchain) are invoked directly via their shebang line on Linux
+# (./airflow_automation/airflow_demo/airflow_demo.sh, ./scenario-player/bin/cmsrel, ...); CRLF
 # there breaks with "cannot execute: required file not found" because the kernel
 # looks for an interpreter literally named e.g. "/bin/bash\r".
 * text=auto eol=lf
