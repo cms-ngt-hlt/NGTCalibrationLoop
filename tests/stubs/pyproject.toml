@@ -7,6 +7,16 @@ name = "ngt-omsapi-stub"
 version = "0.1.0"
 description = "In-memory stand-in for the CERN oms-api-client, used by tests and the offline demo toolchain (see omsapi/__init__.py docstring)."
 requires-python = ">=3.10"
+# requests: fault injection raises real requests.exceptions.* (see
+# set_failure()'s mode= form) instead of a generic RuntimeError.
+# The live-demo (NGT_OMS_STUB_FAULTS_FILE) fault path also imports
+# scenario-player/faults.py's file-locking/consume helpers as a top-level
+# `faults` module. That isn't an installable package, so it can't be listed
+# here; scenario-player/sim_env.sh puts its directory on PYTHONPATH instead
+# (and tests/conftest.py does the same for pytest).
+dependencies = [
+    "requests",
+]
 
 [tool.setuptools]
 py-modules = []
