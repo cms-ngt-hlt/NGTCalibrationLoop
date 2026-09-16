@@ -28,14 +28,22 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
 STUBS_DIR = TESTS_DIR / "stubs"
+SCENARIO_PLAYER_DIR = REPO_ROOT / "scenario-player"
 
 # Order matters: the stub omsapi must be found before any real one, and the repo
-# root must be importable so `import NGTLoopStep2` etc. works regardless of the
-# directory pytest was invoked from.
-for path in (str(TESTS_DIR), str(STUBS_DIR), str(REPO_ROOT)):
+# root must be importable so `import ngt_calibration_loop` works regardless of the
+# directory pytest was invoked from. scenario-player/ supplies the top-level
+# `faults`/`seed`/`scenario_player` modules -- it is not an installed package.
+for path in (
+    str(TESTS_DIR),
+    str(STUBS_DIR),
+    str(SCENARIO_PLAYER_DIR),
+    str(REPO_ROOT),
+):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import faults  # noqa: E402  (scenario-player/faults.py)
 import omsapi  # noqa: E402  (test stub, see tests/stubs/omsapi/__init__.py)
 
 
@@ -128,8 +136,33 @@ def job_runner(monkeypatch):
             super().__init__()
             self._outcomes = []
 
-        def queue_failure(self, exc=None):
-            self._outcomes.append(exc or shell.JobScriptFailedError("forced test failure"))
+        def queue_failure(self, exc=None, *, returncode=None, match=None, times=1):
+            """match: None (default -- matches any call, the original
+            behavior), a substring tested against script_name, or a
+            callable(script_name, cwd) -> bool -- needed because cmsRun
+            (cmsDriver_*.sh / ALCAOUTPUT.sh / HARVESTING.sh) and
+            upload_conditions.py (UPLOAD.sh) share this one seam. times:
+            how many matching calls raise before this entry clears itself
+            (default 1; None = unlimited, matching FaultSpec.times). Pass
+            exactly one of exc/returncode -- returncode builds a
+            JobScriptFailedError naming the code, so message-based
+            assertions read the same regardless of which one produced it."""
+            if exc is not None and returncode is not None:
+                raise ValueError("queue_failure: pass exc OR returncode, not both")
+            if exc is None:
+                exc = shell.JobScriptFailedError(
+                    f"simulated failure (exit code {returncode})"
+                    if returncode is not None
+                    else "forced test failure"
+                )
+            self._outcomes.append({"exc": exc, "match": match, "times_remaining": times})
+
+    def _outcome_matches(match, script_name, cwd):
+        if match is None:
+            return True
+        if callable(match):
+            return match(script_name, cwd)
+        return match in script_name
 
     recorder = JobRunnerRecorder()
 
@@ -137,12 +170,70 @@ def job_runner(monkeypatch):
         recorder.append(
             {"script_name": script_name, "cwd": str(cwd), "stdout_log": stdout_log, "stderr_log": stderr_log}
         )
-        if recorder._outcomes:
-            raise recorder._outcomes.pop(0)
+        for i, outcome in enumerate(recorder._outcomes):
+            if _outcome_matches(outcome["match"], script_name, cwd):
+                remaining = outcome["times_remaining"]
+                if remaining is not None:
+                    remaining -= 1
+                    if remaining <= 0:
+                        recorder._outcomes.pop(i)
+                    else:
+                        outcome["times_remaining"] = remaining
+                raise outcome["exc"]
         return shell.JobResult(returncode=0, stdout_log=stdout_log, stderr_log=stderr_log)
 
     monkeypatch.setattr(shell, "run_job_script", fake_run_job_script)
     return recorder
+
+
+_CMSRUN_STEP_SCRIPT = {
+    "step2": "cmsDriver_",  # prefix match: step2.py's temp_script_name is content-hashed
+    "step3": "ALCAOUTPUT.sh",
+    "step4": "HARVESTING.sh",
+}
+
+
+def _job_fault_matcher(spec):
+    """Build a (script_name, cwd) -> bool predicate matching a FaultSpec's
+    calibration/run/step scope. Mirrors the live player's cwd-derived scope
+    matching (scenario-player/bin/cmsRun) but uses the exact values pytest's job_runner
+    already has on hand (a real script_name, a real cwd) instead of
+    reconstructing them from a job-dir naming convention."""
+
+    def _match(script_name, cwd):
+        cwd = str(cwd)
+        if spec.calibration not in cwd:
+            return False
+        if spec.run is not None and f"run{spec.run}" not in cwd:
+            return False
+        if spec.target == "upload_conditions":
+            return script_name == "UPLOAD.sh"
+        # target == "cmsrun"
+        if spec.step is not None:
+            expected = _CMSRUN_STEP_SCRIPT[spec.step]
+            return script_name.startswith(expected) if spec.step == "step2" else script_name == expected
+        return script_name != "UPLOAD.sh"  # any cmsRun-family script, not the upload one
+
+    return _match
+
+
+@pytest.fixture
+def inject_fault(job_runner):
+    """Apply one YAML-shaped fault dict (the same shape as a scenario's
+    `faults:` entry, minus `at`) to whichever in-process fixture it targets
+    -- the pytest half of the vocabulary shared with scenario-player/scenario_player.py's
+    `faults:` section (see scenario-player/faults.py's FaultSpec)."""
+
+    def _inject(raw: dict):
+        spec = faults.parse_fault_spec(raw)
+        if spec.target == "oms":
+            omsapi.set_failure(
+                spec.mode, status=spec.status, times=spec.times, run=spec.run, message=spec.message
+            )
+        else:
+            job_runner.queue_failure(returncode=spec.exit_code, match=_job_fault_matcher(spec), times=spec.times)
+
+    return _inject
 
 
 @pytest.fixture
