@@ -70,6 +70,37 @@ def extract_ls_number(file_path):
     return int(match.group(1)) if match else None
 
 
+def run_and_file_from_context(context):
+    """Return ``(run_number, file_path)`` for a per-file process task, from
+    whichever of the two sources this design uses:
+
+    * ``dag_run.conf`` -- ngt_dags_per_file.py, which
+      ``trigger_dag_run`` the process DAG with ``conf={"run_number", "file"}``;
+    * the triggering Asset event's ``extra`` -- ngt_dags_watch.py, whose
+      ``ngt_watch_process_<cal>`` DAGs are ``schedule=[Asset("ngt://files/<cal>")]``
+      and get ``{"run_number", "file"}`` from ``LumisectionFileWatcherTrigger``.
+
+    Raises ``AirflowSkipException`` if neither is present (e.g. a bare manual
+    trigger) -- there is nothing for a per-file task to act on."""
+    dag_run = context.get("dag_run")
+    conf = getattr(dag_run, "conf", None) or {}
+    if "file" in conf and "run_number" in conf:
+        return str(conf["run_number"]), str(conf["file"])
+
+    events_by_asset = context.get("triggering_asset_events") or {}
+    all_events = [event for events in events_by_asset.values() for event in events]
+    if not all_events:
+        raise AirflowSkipException("no dag_run.conf and no triggering Asset event -- nothing to process")
+
+    def _ts(event):
+        return getattr(event, "timestamp", None) or datetime.min.replace(tzinfo=timezone.utc)
+
+    extra = dict(getattr(max(all_events, key=_ts), "extra", None) or {})
+    if "file" not in extra and isinstance(extra.get("payload"), dict):  # watcher-wrapped shape
+        extra = extra["payload"]
+    return str(extra["run_number"]), str(extra["file"])
+
+
 def job_run_id_for_file(run_number, file_path):
     # Content-hashed, not sequential -- same reasoning as step3.py/step4.py's
     # job-dir naming: a deterministic run_id lets the caller be invoked more
@@ -99,10 +130,16 @@ def make_step2_express_callable(calibration):
         # edmFileUtil/xrdfs -- see ngt_calibration_loop.eos) and are never
         # deleted by anything else in this pipeline, so
         # step2.prepare_express_job doesn't defend against this either.
-        conf = context["dag_run"].conf
-        run_number, file_path = conf["run_number"], conf["file"]
+        run_number, file_path = run_and_file_from_context(context)
 
         ctx2 = step2.build_run_context(calibration, int(run_number))
+        # Belt-and-braces for the watcher design (ngt_dags_watch.py): its file
+        # watcher can re-yield a file in the window before allLSProcessed.log is
+        # written, and there's no trigger_dag_run run_id to 409-dedupe on -- so
+        # skip a file that's already recorded as processed. A no-op for the
+        # trigger_dag_run designs (deterministic run_ids already prevent it).
+        if str(Path(file_path)) in step2.load_already_processed(ctx2.working_dir):
+            raise AirflowSkipException(f"{file_path} already processed for {calibration} run {run_number}")
         job_spec = step2.prepare_express_job(ctx2, {Path(file_path)})
         step2.run_express_job(job_spec)
         step2.finalize_cycle(
@@ -118,8 +155,7 @@ def make_step2_express_callable(calibration):
 
 def make_step3_alca_callable(calibration):
     def _step3_alca(**context):
-        conf = context["dag_run"].conf
-        run_number = conf["run_number"]
+        run_number, _file = run_and_file_from_context(context)
         step2_output = context["ti"].xcom_pull(task_ids="step2_express", key="step2_output")
 
         ctx3 = step3.build_run_context(calibration, str(run_number))
@@ -138,7 +174,7 @@ def make_step3_alca_callable(calibration):
 
 def make_step4_harvest_callable(calibration):
     def _step4_harvest(**context):
-        run_number = context["dag_run"].conf["run_number"]
+        run_number, _file = run_and_file_from_context(context)
 
         ctx4 = step4.build_run_context(calibration, str(run_number))
         # Reused completely unchanged: files_to_process is already "every
@@ -166,7 +202,7 @@ def make_step4_upload_callable(calibration):
         # Re-derives the same job (idempotent/deterministic naming, like
         # _step4_harvest) instead of passing the JobSpec through XCom -- cheap
         # and idempotent thanks to the content-hashed job-dir naming.
-        run_number = context["dag_run"].conf["run_number"]
+        run_number, _file = run_and_file_from_context(context)
 
         ctx4 = step4.build_run_context(calibration, str(run_number))
         decision = step4.check_files_for_processing(ctx4)
