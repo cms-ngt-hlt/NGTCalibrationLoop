@@ -202,9 +202,123 @@ def test_scenario_files_in_repo_parse_and_build_a_nonempty_timeline():
     scenarios_dir = SCENARIO_PLAYER_DIR / "scenarios"
     yaml_files = list(scenarios_dir.glob("*.yaml"))
     assert yaml_files, "expected at least one example scenario under scenario-player/scenarios/"
+    saw_a_fault = False
     for path in yaml_files:
         scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
         events = scenario_player.build_timeline(scenario)
         assert events, f"{path} produced an empty timeline"
         # Timeline must already be sorted (build_timeline's own contract).
         assert [e.at for e in events] == sorted(e.at for e in events)
+        saw_a_fault = saw_a_fault or any(e.kind == "fault" for e in events)
+    assert saw_a_fault, "expected at least one committed scenario to exercise the faults: section"
+
+
+# --- faults: -------------------------------------------------------------------------
+
+
+def test_build_timeline_parses_faults_interleaved_with_run_events():
+    scenario = {
+        "runs": [
+            {"calibrations": ["EcalPedestals"], "run": 398600, "start_offset": 0, "end_after": 100},
+        ],
+        "faults": [
+            {"target": "oms", "mode": "timeout", "at": 10},
+            {
+                "target": "cmsrun",
+                "mode": "exit_code",
+                "exit_code": 139,
+                "calibration": "EcalPedestals",
+                "step": "step2",
+                "at": 50,
+            },
+        ],
+    }
+    events = scenario_player.build_timeline(scenario)
+    fault_events = [e for e in events if e.kind == "fault"]
+    assert [e.at for e in fault_events] == [10, 50]
+    assert fault_events[0].fault.target == "oms" and fault_events[0].fault.mode == "timeout"
+    assert fault_events[1].fault.exit_code == 139 and fault_events[1].fault.step == "step2"
+    # Interleaved with the run's own events by time, not appended at the end.
+    assert [e.at for e in events] == sorted(e.at for e in events)
+
+
+def test_build_timeline_fault_at_defaults_to_zero():
+    events = scenario_player.build_timeline({"faults": [{"target": "oms", "mode": "timeout"}]})
+    assert events[0].at == 0
+
+
+def test_build_timeline_rejects_invalid_fault_entry():
+    with pytest.raises(ValueError, match="target"):
+        scenario_player.build_timeline({"faults": [{"target": "bogus", "mode": "timeout"}]})
+
+
+def test_fault_event_describe_is_readable():
+    events = scenario_player.build_timeline(
+        {
+            "faults": [
+                {
+                    "target": "cmsrun",
+                    "mode": "exit_code",
+                    "exit_code": 1,
+                    "calibration": "BeamSpot",
+                    "run": 500,
+                    "at": 5,
+                }
+            ]
+        }
+    )
+    description = events[0].describe()
+    assert "arm-fault" in description
+    assert "cmsrun" in description
+    assert "BeamSpot" in description
+    assert "500" in description
+
+
+def test_dry_run_does_not_arm_faults(monkeypatch):
+    calls = []
+    monkeypatch.setattr(scenario_player.seed, "arm_fault", lambda *a, **kw: calls.append((a, kw)))
+
+    events = scenario_player.build_timeline({"faults": [{"target": "oms", "mode": "timeout", "at": 1}]})
+    scenario_player.play(events, dry_run=True, log=lambda _msg: None)
+
+    assert calls == []
+
+
+def test_play_arms_fault_with_expected_arguments(monkeypatch):
+    calls = []
+    monkeypatch.setattr(scenario_player.seed, "arm_fault", lambda *a, **kw: calls.append((a, kw)))
+    monkeypatch.setattr(scenario_player.time, "sleep", lambda _seconds: None)
+
+    events = scenario_player.build_timeline(
+        {
+            "faults": [
+                {
+                    "target": "cmsrun",
+                    "mode": "exit_code",
+                    "exit_code": 139,
+                    "calibration": "EcalPedestals",
+                    "run": 398600,
+                    "step": "step2",
+                    "times": 2,
+                    "message": "custom crash text",
+                    "at": 1,
+                }
+            ]
+        }
+    )
+    scenario_player.play(events, log=lambda _msg: None)
+
+    assert calls == [
+        (
+            ("cmsrun", "exit_code"),
+            {
+                "status": None,
+                "exit_code": 139,
+                "calibration": "EcalPedestals",
+                "run": 398600,
+                "step": "step2",
+                "times": 2,
+                "message": "custom crash text",
+            },
+        )
+    ]
