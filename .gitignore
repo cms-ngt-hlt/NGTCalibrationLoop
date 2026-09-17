@@ -3,4 +3,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 /demo-env/
+/compare-env/
+/ignored-prototypes/
+/research-docs/ignored-research/
 *.egg-info/
+/CLAUDE.local.md
+/cc-exports/
+/.claude/
+CERNBox*.lnk
