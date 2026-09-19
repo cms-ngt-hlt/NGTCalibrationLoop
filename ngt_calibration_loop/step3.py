@@ -6,6 +6,10 @@ of their input file set instead of a monotonically incrementing in-memory
 counter (`self.alcaJobNumber`), because Airflow retries a failed task by
 re-executing the same callable -- a counter would mint a new (duplicate) job
 directory on every retry, where a content hash reproduces the same one.
+
+What only the original FSM needed -- scanning for un-latched run directories and
+the witness-file-driven batch/wait/final decision -- lives in
+original_fsm_only/step3.py; the DAGs hand each process task its run and files.
 """
 
 import hashlib
@@ -18,7 +22,6 @@ from typing import Optional
 
 from . import config, shell
 
-MINIMUM_FILES_PER_BATCH = 1
 # kept as-is from NGTLoopStep3.py (comment there says "8 hours"; value is 9h);
 # overridable per calibration (step_3_config.timeoutSeconds) -- see step2.py's
 # DEFAULT_MAX_LATCH_TIME_HOURS for why a live-test setup needs that.
@@ -60,25 +63,6 @@ def _path_where_files_appear(ngt_params, calibration_name):
     return os.path.join(data_base_path, calibration_name) + "/"
 
 
-def find_new_run(calibration_name, already_latched_run_numbers):
-    """Scan for a run directory not already latched by a processor DAG chain
-    (the caller supplies that set, replacing the old in-memory
-    setOfRunsProcessed). Returns the earliest new run's number as a string, or
-    None."""
-    ngt_params = config.load_ngt_parameters()
-    path = Path(_path_where_files_appear(ngt_params, calibration_name))
-    if not path.exists():
-        return None
-
-    current_dirs = {p.name for p in path.iterdir() if p.is_dir()}
-    already = {f"run{n}" for n in already_latched_run_numbers}
-    new_runs = {p for p in (current_dirs - already) if p.startswith("run")}
-    if not new_runs:
-        return None
-
-    return sorted(new_runs)[0][3:]
-
-
 def build_run_context(calibration_name, run_number):
     ngt_params = config.load_ngt_parameters()
     calib_config = config.load_calibration_config(calibration_name)
@@ -104,55 +88,6 @@ def build_run_context(calibration_name, run_number):
         ngt_params=ngt_params,
         timeout_seconds=calib_config["step_3_config"].get("timeoutSeconds", DEFAULT_TIMEOUT_SECONDS),
     )
-
-
-def _run_is_not_complete(working_dir):
-    return not (Path(working_dir) / RUN_END_LOG_NAME).exists()
-
-
-def _still_have_time(start_time, timeout_seconds):
-    diff = datetime.now(timezone.utc) - start_time
-    return diff.total_seconds() <= timeout_seconds
-
-
-def load_already_processed(working_dir):
-    log_path = Path(working_dir) / PROCESSED_LOG_NAME
-    if not log_path.exists():
-        return set()
-    return {line.strip() for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()}
-
-
-def _available_files(ctx: RunContext):
-    conf = ctx.calib_config["step_3_config"]
-    suffix_control = conf["step_2_witness_suffix"]
-    root_suffix = conf["step_2_root_suffix"]
-
-    control_files = {str(p) for p in Path(ctx.working_dir).glob(f"run*{suffix_control}")}
-    changed = {
-        (s[: -len(suffix_control)] + root_suffix if s.endswith(suffix_control) else s)
-        for s in control_files
-    }
-    return {Path(s) for s in changed}
-
-
-def check_files_for_processing(ctx: RunContext):
-    """Mirrors CheckFilesForProcessing + the ContinueAfterCheckFiles transition
-    conditions, in the same precedence order as the original transition list:
-    enough files waiting takes priority even over an expired timeout (unlike
-    Step 2, where an expired timeout wins outright)."""
-    already_processed = {Path(p) for p in load_already_processed(ctx.working_dir)}
-    available = _available_files(ctx)
-    files_to_process = available - already_processed
-
-    enough_files = len(files_to_process) >= MINIMUM_FILES_PER_BATCH
-
-    if files_to_process and enough_files:
-        return CycleDecision(action="batch", files_to_process=files_to_process)
-
-    if _run_is_not_complete(ctx.working_dir) and _still_have_time(ctx.start_time, ctx.timeout_seconds):
-        return CycleDecision(action="wait", files_to_process=files_to_process)
-
-    return CycleDecision(action="final", files_to_process=files_to_process)
 
 
 def _job_dir_name(input_files):

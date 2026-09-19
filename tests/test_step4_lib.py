@@ -1,9 +1,9 @@
-"""Tests for ngt_calibration_loop.step4: discovering new run directories,
-recursively discovering Step 3 ALCARECO outputs across alcaPromptJob*
-subdirectories, the "reprocess everything, not just what's new" harvesting
-behavior (unlike Step 2/3), and the harvesting job prep / run / upload /
-finalize cycle -- including the split between run_harvesting_job and
-upload_conditions as two independently-retryable steps.
+"""Tests for ngt_calibration_loop.step4: recursively discovering Step 3
+ALCARECO outputs across alcaPromptJob* subdirectories, the "reprocess
+everything, not just what's new" harvesting behavior (unlike Step 2/3), and
+the harvesting job prep / run / upload / finalize cycle -- including the split
+between run_harvesting_job and upload_conditions as two independently-retryable
+steps.
 
 1:1 behavioral port of the old tests/test_step4.py.
 """
@@ -59,29 +59,15 @@ def test_cond_auth_path_is_redirected_via_config(isolated_env):
     assert ctx.cmssw_path == "/nfshome0/sakura/"  # from calibrationYAML, untouched by path config
 
 
-# --- Run discovery --------------------------------------------------------------------
-
-
-def test_no_calibration_dir_yet_returns_none(isolated_env):
-    assert step4.find_new_run(CALIBRATION, already_latched_run_numbers=set()) is None
-
-
-def test_finds_new_run_directory(isolated_env):
+def test_build_run_context_points_at_the_run_directory(isolated_env):
+    """(The FSM's run-directory scan, step4's find_new_run, is covered in
+    test_original_fsm_only.py.)"""
     run_dir = _run_dir(isolated_env, 398600)
     run_dir.mkdir(parents=True)
 
-    run_number = step4.find_new_run(CALIBRATION, already_latched_run_numbers=set())
+    ctx = step4.build_run_context(CALIBRATION, "398600")
 
-    assert run_number == "398600"
-    ctx = step4.build_run_context(CALIBRATION, run_number)
     assert Path(ctx.working_dir) == run_dir
-
-
-def test_ignores_already_latched_runs(isolated_env):
-    run_dir = _run_dir(isolated_env, 398600)
-    run_dir.mkdir(parents=True)
-
-    assert step4.find_new_run(CALIBRATION, already_latched_run_numbers={"398600"}) is None
 
 
 # --- Step 3 file discovery (recursive, across alcaPromptJob* dirs) --------------------

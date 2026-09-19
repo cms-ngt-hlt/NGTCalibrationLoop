@@ -6,4 +6,7 @@ NGTLoopStep2/3/4.py. No Airflow imports here -- these functions are plain
 Python so they can be unit tested without a running Airflow instance; the
 DAGs in airflow_automation/airflow_dags/ are thin wrappers that call into this
 package from PythonOperator callables.
+
+`original_fsm_only/` holds the few functions no Airflow design calls (see its
+docstring); everything else here is used by the DAGs.
 """
