@@ -14,3 +14,29 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["ngt_calibration_loop*"]
+
+# --- Linting ---------------------------------------------------------------------------
+# Run by .github/workflows/pylint.yml over the library and the DAGs (what replaced the old
+# NGT*.py scripts); the same commands work locally, see AGENTS.md. flake8 has no
+# pyproject support, its settings are in .flake8.
+
+[tool.pylint.main]
+fail-under = 9.9
+recursive = true  # airflow_automation/ is a plain directory (only airflow_dags/ inside it is a package)
+
+[tool.pylint."messages control"]
+disable = [
+    # carried over from the original workflow
+    "R0801", "C0103", "E0401", "W1203", "R1732", "R0902", "R0904", "R0914", "R0915", "W1509", "C0302",
+    "C0301",  # line-too-long: flake8 ignores E501 too; long comment/docstring lines are deliberate
+    "C0115", "C0116",  # missing class/function docstring: the modules explain themselves
+    "W0104",  # pointless-statement: Airflow's `task_a >> task_b` dependency syntax
+    "W0718",  # broad-exception-caught: deliberate degrade-to-a-fallback / keep-polling catches
+    "R1735",  # use-dict-literal: the dict(retries=3, ...) kwargs idiom
+]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+# airflow_dags lives in airflow_automation/, so isort can't discover it on its own.
+known_first_party = ["airflow_dags", "ngt_calibration_loop"]

@@ -57,6 +57,11 @@ pytest                              # Airflow-dependent tests skip cleanly when
                                      # apache-airflow isn't installed
 ```
 
+CI (`.github/workflows/pylint.yml`) runs `pylint`, `isort --check-only` and `flake8` over
+`ngt_calibration_loop/` and `airflow_automation/` (the library and the DAGs -- not `tests/` or
+`scenario-player/`); settings are in `pyproject.toml` and `.flake8`, so `pip install pylint isort
+flake8` and running each on those two directories reproduces CI.
+
 For running Airflow itself, the live tmux-based demo, or `scenario-player/scenario_player.py`
 scenarios, see README.md's "Setting up and running Airflow" / "Running a live demo"
 sections, and your local override file for this machine's exact setup. Don't
