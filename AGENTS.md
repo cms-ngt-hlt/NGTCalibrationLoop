@@ -17,7 +17,9 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
 
 - `ngt_calibration_loop/` — processing logic (OMS/EOS queries, cmsDriver prep, batching),
   as plain functions with no Airflow dependency. `step2.py`/`step3.py`/`step4.py` per step;
-  `config.py`/`oms.py`/`eos.py`/`shell.py` shared helpers.
+  `config.py`/`oms.py`/`eos.py`/`shell.py` shared helpers; `original_fsm_only/` the few
+  functions only the original FSM used (no Airflow design calls them; tests in
+  `tests/test_original_fsm_only.py`).
 - `airflow_automation/` — everything specific to the Airflow prototypes:
   - `airflow_dags/` — the two DAG designs (see README.md) plus `airflow_api.py`, the shared
     wrapper around Airflow's REST API used for cross-DAG coordination. Still imported as the

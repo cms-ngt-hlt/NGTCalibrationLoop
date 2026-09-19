@@ -14,9 +14,8 @@ step:
 The processing logic for each step lives in `ngt_calibration_loop/step{2,3,4}.py`, and is
 orchestrated by **Apache Airflow** (`airflow_automation/airflow_dags/`) rather than the hand-rolled
 finite state machines + `while True` polling loops the demonstrator originally used for 2025
-data taking. See "Why Airflow" below for the motivation, and `loop_diagram.md` for the original
-FSM design this replaced (kept as background -- the batching/latching *logic* it documents is
-unchanged, only how it's scheduled and retried).
+data taking. See "Why Airflow" below for the motivation. The batching/latching *logic* is
+unchanged from the FSMs, only how it's scheduled and retried.
 
 ### Workflow Data Flow
 
@@ -157,15 +156,12 @@ hold, so Step 2 and Step 3 have to execute on the same machine (Step 2's output 
 machine's local disk), while Step 4 -- needing only Step 3's small output -- can run anywhere.
 The options this requires (both for a plain Airflow-orchestrated worker pool and for Airflow
 submitting to a SLURM/HTCondor-style batch system instead) are analysed in a design write-up
-that isn't tracked in this repo yet. For background on resource management/batch systems in general -- including an
-introduction to SLURM and HTCondor for anyone who hasn't used one, and how Airflow's own
-resource-management model compares to Luigi/REANA/Dagster/Prefect/Kestra -- see
-[`research-docs/resource_management_and_batch_systems_guide.md`](research-docs/resource_management_and_batch_systems_guide.md)
-(a general/background reference, kept alongside other non-codebase-specific research writeups in
-[`research-docs/`](research-docs/)). A summary of the real NGT demonstrator's own target
-hardware, event rates/sizes, buffer-sizing calculations, and processing-time benchmarks
-(external CERN/CMS project reports, not this repo's mocked dev environment) also exists but
-isn't tracked in this repo yet.
+that isn't tracked in this repo yet. Two background references aren't tracked here either: one on
+resource management and batch systems in general (an introduction to SLURM and HTCondor for
+anyone who hasn't used one, and how Airflow's own resource-management model compares to
+Luigi/REANA/Dagster/Prefect/Kestra), and one summarising the real NGT demonstrator's own target
+hardware, event rates/sizes, buffer-sizing calculations and processing-time benchmarks (external
+CERN/CMS project reports, not this repo's mocked dev environment).
 
 ## Package layout
 
@@ -174,7 +170,10 @@ isn't tracked in this repo yet.
   `config.py`/`oms.py`/`eos.py`/`shell.py` are shared helpers; `step2.py`/`step3.py`/`step4.py`
   hold each step's logic. `shell.run_job_script` is the one seam that actually launches a job
   script, blocking until it completes -- this is what replaced the old `subprocess.Popen(...)`
-  fire-and-forget calls.
+  fire-and-forget calls. `original_fsm_only/` holds the few functions only the original
+  FSM orchestration used (the Step 3/4 run-directory scan, Step 3's witness-file batching
+  decision) -- no Airflow design calls them, they're kept, tested, but out of the step modules
+  the DAGs import.
 - `airflow_automation/airflow_dags/ngt_dags_per_file.py` / `airflow_automation/airflow_dags/triggers.py` /
   `airflow_automation/airflow_dags/_perfile_process.py` -- the per-file DAG design (run-detector /
   deferred file-detector / per-file processing); `_perfile_process.py` holds the step2/3/4
@@ -183,7 +182,7 @@ isn't tracked in this repo yet.
 - `airflow_automation/airflow_dags/ngt_dags_watch.py` -- an AssetWatcher-driven design: **all assets static, driven by
   `AssetWatcher`s, zero cron DAGs**. One `Asset("ngt://runs")` watched for new runs, three static
   `Asset("ngt://files/<cal>")` watched for that run's new files (one event per file); watermarks
-  in each Asset's `AssetStateStore`. The shape `research-docs/design-analysis/asset_based_scheduling_analysis.md` §5 recommends.
+  in each Asset's `AssetStateStore`.
   See [`airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md`](airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md).
 - `airflow_automation/airflow_dags/airflow_api.py` -- small wrapper around Airflow's stable REST API, used by
   the per-file design for cross-DAG coordination (see "Airflow 3 note" above); the AssetWatcher design needs none.
@@ -267,6 +266,8 @@ pytest
     (`job_runner.queue_failure()`) to exercise the retry-triggering path
   - filesystem paths -> redirected into a pytest `tmp_path` via `NGT_PARAMETERS_PATH`/
     `NGT_CALIBRATION_YAML_DIR`
+- `tests/test_original_fsm_only.py` -- the same style of tests for `ngt_calibration_loop/original_fsm_only/`
+  (run-directory scan, Step 3's witness-file batching decision).
 - `tests/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building (ordering,
   concurrent-run merging) and playback (event firing order/arguments), with `scenario-player/seed.py`'s
   functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access needed.
@@ -503,8 +504,8 @@ python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_
 
 ```
 
-**`airflow_automation/airflow_dags/ngt_dags_watch.py`**: 4 DAGs, **zero cron** -- the shape
-`asset_based_scheduling_analysis.md` §5 recommends: every asset static, driven by `AssetWatcher`s.
+**`airflow_automation/airflow_dags/ngt_dags_watch.py`**: 4 DAGs, **zero cron** -- every asset
+static, driven by `AssetWatcher`s.
 
 - `Asset("ngt://runs")` with a `RunWatcherTrigger` -- an event-driven `BaseEventTrigger` that
   runs continuously in the `triggerer` (while `ngt_watch_run_primer` is unpaused), polls OMS
