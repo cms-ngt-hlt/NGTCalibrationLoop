@@ -1,0 +1,113 @@
+# Demonstrates the `faults:` section (see scenario-player/faults.py and
+# scenario-player/scenario_player.py's module docstring) across TWO back-to-back EcalPedestals
+# runs that push the same fault types from "partial" to "total" failure:
+#   run 900011 -- one-shot/short faults that Airflow's own retry policies fully
+#                 absorb (mirrors fault_injection_demo.yaml's single-run case).
+#   run 900012 -- the same cmsRun/upload_conditions faults rearmed with
+#                 times: 6, deliberately outlasting BOTH retry budgets (cmsrun:
+#                 3 retries = 4 attempts; upload: 5 retries = 6 attempts -- see
+#                 airflow_automation/airflow_dags/_perfile_process.py's LAUNCH_RETRY_KWARGS/
+#                 UPLOAD_RETRY_KWARGS), so at least one file's processing DAG is
+#                 expected to fail outright rather than recover. The 6-use
+#                 budget is shared across whichever of run 900012's 3 files'
+#                 step2/step4 attempts reach it first (order depends on
+#                 Airflow's own scheduling), so exactly which file(s) end up
+#                 permanently failed vs. merely retried can vary between runs.
+#
+# Run numbers 900011/900012 are deliberately unused by any other
+# scenario-player/scenarios/*.yaml file, so this scenario's Airflow-UI/log
+# output is never confused with another one's while both might be live-tested
+# around the same time. Re-running this scenario a second time without
+# `airflow_automation/airflow_demo/airflow_demo.sh reset-scenario` in between will silently do nothing --
+# every design's on-disk run-directory dedup (`step2.find_new_run`) treats
+# run 900011/900012 as already handled once their working dirs exist.
+#
+# What to expect while watching Airflow (task logs / UI) as this plays:
+#   t=+5s    OMS connection errors twice (times: 2) -- daq_is_running/
+#            last_ls_run_number fall back to their safe defaults (see
+#            tests/test_oms_faults.py); find_new_run is unaffected (it never
+#            filters by run_number, so this run-scoped fault can't match it).
+#   t=+30s   OMS returns one HTTP 503 -- has NO visible effect on
+#            daq_is_running/last_ls_run_number/run_end_time, since none of
+#            them call raise_for_status(); documents that existing gap live.
+#   t=+45s   run 900011's cmsRun crashes once (exit 139, a segfault-style
+#            code) -- launch_job's retry policy (3 retries, 2min exponential
+#            backoff) should retry and succeed on the next attempt.
+#   t=+90s   run 900012 starts (start_offset: 90).
+#   t=+115s  run 900012's upload_conditions.py starts returning exit code 1,
+#            up to 6 times -- step4_upload's retry policy (5 retries, 1min
+#            backoff = 6 attempts total) can exhaust exactly at this budget.
+#   t=+130s  run 900012's cmsRun starts crashing (exit 139), up to 6 times --
+#            more than step2's own 4-attempt budget (3 retries), so whichever
+#            file's step2 draws from this budget first is expected to fail
+#            outright rather than recover.
+#   t=+150s  run 900011's upload_conditions.py returns exit code 1 once --
+#            step4_upload's independent retry policy (5 retries, 1min
+#            backoff) should retry and succeed, without re-running the
+#            harvesting job.
+#
+# Play with (against a live `airflow_automation/airflow_demo/airflow_demo.sh setup && start`, per
+# README.md -- e.g. with only ngt_watch_* unpaused):
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/partial_to_total_fault_injection_demo.yaml --dry-run
+#   python3 scenario-player/scenario_player.py scenario-player/scenarios/partial_to_total_fault_injection_demo.yaml
+runs:
+  - calibrations: [EcalPedestals]
+    run: 900011
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 20}
+      - {ls: 3, after: 20}
+    end_after: 30
+  - calibrations: [EcalPedestals]
+    run: 900012
+    start_offset: 90
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+    end_after: 20
+
+faults:
+  - target: oms
+    mode: connection_error
+    run: 900011
+    at: 5
+    times: 2
+
+  - target: oms
+    mode: http_error
+    status: 503
+    at: 30
+
+  - target: cmsrun
+    mode: exit_code
+    exit_code: 139
+    calibration: EcalPedestals
+    run: 900011
+    step: step2
+    at: 45
+
+  - target: upload_conditions
+    mode: exit_code
+    exit_code: 1
+    calibration: EcalPedestals
+    run: 900011
+    at: 150
+
+  - target: cmsrun
+    mode: exit_code
+    exit_code: 139
+    calibration: EcalPedestals
+    run: 900012
+    step: step2
+    at: 130
+    times: 6
+
+  - target: upload_conditions
+    mode: exit_code
+    exit_code: 1
+    calibration: EcalPedestals
+    run: 900012
+    at: 115
+    times: 6
