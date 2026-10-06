@@ -7,6 +7,11 @@ name = "ngt-omsapi-stub"
 version = "0.1.0"
 description = "In-memory stand-in for the CERN oms-api-client, used by tests and the offline demo toolchain (see omsapi/__init__.py docstring)."
 requires-python = ">=3.8"
+# requests: faults raise real requests.exceptions.*. Faults also need scenario-player/faults.py,
+# which is not installable: env.sh and tests/conftest.py put it on the path.
+dependencies = [
+    "requests",
+]
 
 [tool.setuptools]
 py-modules = []
