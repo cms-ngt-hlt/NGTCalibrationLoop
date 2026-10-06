@@ -4,7 +4,8 @@ A fault names the system (`target`), how it fails (`mode`), an optional scope
 (`calibration`/`run`/`step`) and how many matching calls it survives (`times`).
 Whatever consumes it prints describe()'s one-line text.
 
-pytest arms the fake OMS in-process with tests/stubs/omsapi's set_failure(); a
+pytest arms a fault in-process with tests/conftest.py's inject_fault (an OMS one
+through tests/stubs/omsapi's set_failure()); a
 live scenario arms faults by writing $NGT_DEV_HOME/faults/<target>.json
 (seed.py's arm_fault), which the fakes consume in the processes running the
 loops. Standard library only, so the fakes in bin/ can import it.
@@ -205,7 +206,8 @@ def consume_fault(path, scope):
 
 def scope_from_cwd(cwd):
     """{calibration, run, step} of a job the loops run in `cwd`: Step 2 in <data>/<calibration>/run<N>/,
-    Steps 3 and 4 one level deeper, in alcaPromptJob<NNN>/ and harvestJob<NNN>/."""
+    Steps 3 and 4 one level deeper, in alcaPromptJob<NNN>/ and harvestJob<NNN>/ (ngt_calibration_loop's
+    hash their inputs instead: alcaPromptJob_<hash>/, harvestJob_<hash>/)."""
     parts = str(cwd).replace("\\", "/").rstrip("/").split("/")
     i = next((i for i, part in enumerate(parts) if re.fullmatch(r"run\d+", part)), None)
     if i is None:

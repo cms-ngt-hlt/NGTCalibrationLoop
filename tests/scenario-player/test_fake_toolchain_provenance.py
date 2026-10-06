@@ -136,7 +136,15 @@ def test_step2_derives_lumisections_from_the_raw_filenames(chain):
     assert manifest["lumisections"] == [51, 52]
 
 
-@pytest.mark.parametrize("job_dir_name, step", [("alcaPromptJob000", "step3"), ("harvestJob001", "step4")])
+@pytest.mark.parametrize(
+    "job_dir_name, step",
+    [
+        ("alcaPromptJob000", "step3"),
+        ("alcaPromptJob_abc1234567", "step3"),  # ngt_calibration_loop's content-hashed job dirs
+        ("harvestJob001", "step4"),
+        ("harvestJob_def7654321", "step4"),
+    ],
+)
 def test_the_step_is_read_off_the_job_dir(chain, job_dir_name, step):
     job_dir = chain / job_dir_name
     job_dir.mkdir()

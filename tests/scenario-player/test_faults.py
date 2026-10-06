@@ -77,7 +77,14 @@ def test_scope_matches():
 
 @pytest.mark.parametrize(
     "job_dir, step",
-    [("", "step2"), ("/alcaPromptJob000", "step3"), ("/harvestJob001", "step4"), ("/other", None)],
+    [
+        ("", "step2"),
+        ("/alcaPromptJob000", "step3"),
+        ("/alcaPromptJob_abc1234567", "step3"),  # ngt_calibration_loop's content-hashed job dirs
+        ("/harvestJob001", "step4"),
+        ("/harvestJob_def7654321", "step4"),
+        ("/other", None),
+    ],
 )
 def test_scope_from_cwd_reads_the_loops_directory_layout(job_dir, step):
     scope = faults.scope_from_cwd(f"/data/EcalPedestals/run398600{job_dir}")
