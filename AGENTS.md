@@ -58,6 +58,12 @@ pytest                              # Airflow-dependent tests skip cleanly when
                                      # apache-airflow isn't installed
 ```
 
+CI (`.github/workflows/pylint.yml`) runs `pylint`, `isort --check-only` and `flake8` over the FSM
+scripts (`NGTLoopStep2/3/4.py`, `ngt_loop_config.py`), `ngt_calibration_loop/` and
+`airflow_automation/` (not `tests/` or `scenario-player/`); settings are in `pyproject.toml` and
+`.flake8`, so `pip install pylint isort flake8` and running each on the targets listed in that
+workflow's `LINT_TARGETS` reproduces CI.
+
 For running Airflow itself, the live tmux-based demo, or `scenario-player/scenario_player.py`
 scenarios, see README.md's "Setting up and running Airflow" / "Running a live demo"
 sections, and your local override file for this machine's exact setup. Don't

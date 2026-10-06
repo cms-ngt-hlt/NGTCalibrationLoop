@@ -17,8 +17,7 @@ from pathlib import Path
 
 from transitions import Machine, State
 
-from ngt_loop_config import (_load_calibration_config, _load_ngt_parameters,
-                             _setup_logging)
+from ngt_loop_config import _load_calibration_config, _load_ngt_parameters, _setup_logging
 
 os.umask(0o002)
 

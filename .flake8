@@ -1,0 +1,3 @@
+[flake8]
+# Same as the old `--ignore=E501` (long lines are fine), but keeping flake8's default ignores.
+extend-ignore = E501
