@@ -63,6 +63,8 @@ Running Airflow (one shared instance, tmux sessions NGTAirflow*):
   ui                                      Print the Airflow UI URL
   logs <scheduler|dag-processor|api|triggerer>   Tail -f that process's tmux console log
 
+DAG control:
+
 Resetting state (see scenario-player/sim_env.sh's setup/reset for the simulator's OWN state --
 \$NGT_DEV_HOME -- which none of these touch, except reset-scenario):
   reset-airflow                           Full reset: drop + recreate the whole metadata DB
@@ -124,13 +126,20 @@ demo_env_exports() {
   # pip-installs tests/stubs (a real, tiny installable package) directly into
   # ~/airflow3-ngt-venv, so `import omsapi` resolves normally everywhere
   # without relying on subprocess environment propagation.
+  # NGT_RUN_END_GRACE_SECONDS: read by _process_tasks.py and used by the
+  # file watchers (which run in the triggerer -- this block reaches
+  # it too, start_component uses it for all four processes uniformly).
+  # Production default (triggers.DEFAULT_RUN_END_GRACE_SECONDS) is 30 min;
+  # 20s here is comfortably above NGT_FILE_POLL_SECONDS
+  # (5s) without racing a normal in-flight poll, so a scenario's
+  # end-run resolves in seconds instead of minutes.
   cat <<ENV
 export NGT_PARAMETERS_PATH="$NGT_DEV_HOME/ngtParameters.jsn"
 export NGT_CALIBRATION_YAML_DIR="$NGT_DEV_HOME/calibrationYAML"
 export NGT_OMS_STUB_RUNS_FILE="$NGT_DEV_HOME/oms_runs.json"
 export NGT_OMS_STUB_FAULTS_FILE="$NGT_DEV_HOME/faults/oms.json"
 export NGT_FAULTS_DIR="$NGT_DEV_HOME/faults"
-export NGT_LOOP_SLEEP_SECONDS="${NGT_LOOP_SLEEP_SECONDS:-10}"
+export NGT_RUN_END_GRACE_SECONDS="${NGT_RUN_END_GRACE_SECONDS:-20}"
 export PATH="$NGT_DEV_HOME/bin:\$PATH"
 ENV
 }
