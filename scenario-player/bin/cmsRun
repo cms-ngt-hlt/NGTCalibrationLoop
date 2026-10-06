@@ -5,7 +5,8 @@
 Reads the `# FAKE_OUTPUTS=...` marker scenario-player/bin/cmsDriver.py wrote into the given
 python config and creates each listed output file in the current directory, so
 the calling bash script's `if cmsRun ...; then mv/touch ...` success path has
-real files to work with.
+real files to work with. Each output is a provenance manifest (scenario-player/fake_conddb.py)
+naming the lumisections the job's `# FAKE_INPUTS=...` actually carried.
 
 A fault armed for this job (faults.consume_armed: $NGT_FAULTS_DIR/cmsrun.json, scoped by the
 working directory) makes it print faults.describe()'s line and exit with the fault's code instead.
@@ -14,9 +15,10 @@ import os
 import re
 import sys
 
-# env.sh puts this checkout's scenario-player/bin on $PATH, so scenario-player/faults.py is always
-# one directory up.
+# env.sh puts this checkout's scenario-player/bin on $PATH, so scenario-player/faults.py and
+# fake_conddb.py are always one directory up.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+import fake_conddb  # noqa: E402
 import faults  # noqa: E402
 
 
@@ -45,11 +47,18 @@ def main():
         print(f"(FAKE) cmsRun: no FAKE_OUTPUTS marker in {python_filename}", file=sys.stderr)
         sys.exit(1)
 
-    for output in outputs:
-        with open(output, "wb") as f:
-            f.write(b"(FAKE) output produced by scenario-player/bin/cmsRun -- not real physics data\n")
+    match = re.search(r"# FAKE_INPUTS=(.*)", content)
+    inputs = [i for i in (match.group(1).split(",") if match else []) if i]
 
-    print(f"(FAKE) cmsRun: ran {python_filename}, wrote {outputs}")
+    # Derived from the actual inputs, never from the scenario: feed a harvest the wrong files and
+    # its payload is wrong too.
+    scope = faults.scope_from_cwd(os.getcwd())
+    lumisections = fake_conddb.merge_input_lumisections(inputs)
+    for output in outputs:
+        fake_conddb.write_provenance(output, lumisections=lumisections, inputs=inputs, **scope)
+
+    ls_summary = ",".join(str(ls) for ls in sorted(lumisections)) or "none"
+    print(f"(FAKE) cmsRun: ran {python_filename}, wrote {outputs} covering LS {ls_summary}")
 
 
 if __name__ == "__main__":
