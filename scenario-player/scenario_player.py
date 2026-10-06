@@ -36,8 +36,21 @@ A top-level `faults:` list arms simulated OMS/cmsRun/upload_conditions.py failur
 same timeline: each entry is a faults.py fault plus `at`, seconds since playback start (see
 scenario-player/scenarios/fault_injection_demo.yaml).
 
+A top-level `expect:` block lists the payloads that should reach the dummy conditions DB (see
+scenario-player/expectations.py). After playback the player waits for this play's uploads to
+settle and checks them, so a scenario passes or fails by itself:
+
+    expect:
+      allow_extra: {before: true}      # tolerate the intermediate re-harvests
+      payloads:
+        - {calibration: EcalPedestals, run: 398600, lumisections: 51-53}
+
+Exit codes: 0 = played, and the expectations (if any) held; 1 = they didn't, or the uploads never
+settled; 2 = a malformed scenario, or --interactive ran out of stdin; 130 = Ctrl-C.
+
 This script only calls scenario-player/seed.py's library functions
-(seed_run/add_ls/end_run/arm_fault) -- it has no orchestration-engine import at all.
+(seed_run/add_ls/end_run/arm_fault) and reads the ledger via
+scenario-player/fake_conddb.py -- it has no orchestration-engine import at all.
 """
 # see def parse_args below to see available commands
 import argparse
@@ -54,10 +67,16 @@ from typing import Optional
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import expectations as ngt_expectations  # noqa: E402  -- scenario-player/expectations.py
+import fake_conddb  # noqa: E402  -- scenario-player/fake_conddb.py, the dummy conditions DB
 import faults as ngt_faults  # noqa: E402  -- scenario-player/faults.py, the shared fault vocabulary
 import seed  # noqa: E402  -- scenario-player/seed.py, reused as a library (engine-agnostic)
 
 MONITOR_INTERVAL_SECONDS = 2.0  # fast enough to feel live, slow enough to stay quiet
+
+EXIT_OK = 0
+EXIT_EXPECTATIONS_FAILED = 1
+EXIT_BAD_SCENARIO = 2
 
 
 def parse_args():
@@ -73,8 +92,16 @@ def parse_args():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the resolved timeline and exit; touches nothing (useful for validating a "
-             "scenario file or wiring it into a non-interactive test)",
+        help="print the resolved timeline and expectations and exit; touches nothing (useful for "
+             "validating a scenario file or wiring it into a non-interactive test)",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="skip playback and check the whole conditions DB against the scenario's expect: block",
+    )
+    parser.add_argument(
+        "--no-validate", action="store_true", help="play the scenario but ignore its expect: block"
     )
     parser.add_argument(
         "--interactive",
@@ -117,6 +144,13 @@ def parse_args():
             )
         if args.speed is not None and args.speed <= 0:
             parser.error(f"--speed must be positive, got {args.speed}")
+        if args.validate_only and args.no_validate:
+            parser.error("--validate-only and --no-validate are mutually exclusive")
+        if args.validate_only and (args.interactive or args.dry_run or args.monitor or args.speed is not None):
+            parser.error(
+                "--validate-only plays nothing: --interactive, --dry-run, --monitor and --speed have no "
+                "meaning with it"
+            )
     return args
 
 
@@ -402,8 +436,38 @@ class DataDirMonitor:
         self.poll()
 
 
+def check_expectations(expectations, name, log=_emit, skip=0):
+    """Settle-wait, evaluate the ledger's rows after the first `skip`, print the report.
+    Returns an exit code."""
+    settled, rows = ngt_expectations.wait_for_settle(expectations, log=log, skip=skip)
+    verdict = ngt_expectations.evaluate(expectations, rows)
+    verdict.settled = settled
+    if not settled:
+        verdict.ok = False
+        verdict.problems.append(
+            f"uploads were still arriving after settle_timeout={expectations.settle_timeout:.0f}s -- "
+            "inconclusive: the pipeline had not finished"
+        )
+    log(ngt_expectations.format_report(verdict, expectations, name=name))
+    return EXIT_OK if verdict.ok else EXIT_EXPECTATIONS_FAILED
+
+
 def main():
     args = parse_args()
+
+    speed = 1.0 if args.speed is None else args.speed
+    scenario = _load_scenario(args.scenario)
+
+    # A malformed scenario exits 2, without a traceback; expectations that didn't hold exit 1.
+    try:
+        events = build_timeline(scenario)
+        raw_expect = scenario.get("expect") if isinstance(scenario, dict) else None
+        expectations = (
+            None if raw_expect is None or args.no_validate else ngt_expectations.parse_expectations(raw_expect)
+        )
+    except (ValueError, ngt_faults.FaultSpecError) as exc:
+        print(f"{args.scenario}: {exc}", file=sys.stderr)
+        return EXIT_BAD_SCENARIO
 
     if args.only_list_calibrations:
         # "only" is the contract: every other flag is ignored rather than rejected, so
@@ -411,25 +475,30 @@ def main():
         # has instead of picking the scenario path out of it. One name per line and
         # nothing else on stdout -- an empty scenario prints nothing at all, rather than
         # prose a caller looping over the output would take for a calibration name.
-        # build_timeline still runs, so a malformed scenario fails here, before whoever
+        # The scenario was parsed above, so a malformed one fails here, before whoever
         # asked has started anything. Fault events are skipped: an oms fault has no
         # calibration at all, and a scoped one never needs loops its runs don't feed.
-        events = build_timeline(_load_scenario(args.scenario))
         for calibration in sorted({e.calibration for e in events if e.kind != "fault"}):
             _emit(calibration)
         return None
 
-    speed = 1.0 if args.speed is None else args.speed
+    if args.validate_only:
+        if expectations is None:
+            print(f"{args.scenario}: --validate-only needs an expect: block", file=sys.stderr)
+            return EXIT_BAD_SCENARIO
+        return check_expectations(expectations, name=str(args.scenario))
 
-    events = build_timeline(_load_scenario(args.scenario))
     if not events:
         _emit("(scenario has no runs -- nothing to play)")
         return None
 
     if args.dry_run:
         show_timeline(events)
+        _emit(expectations.describe() if expectations else "expect: (none -- scenario is not self-validating)")
         return None
 
+    # Only this play's uploads are checked: an earlier play's stay in the ledger until a reset.
+    uploads_before = len(fake_conddb.read_ledger())
     # Constructing the monitor is what baselines the data directory, so it has to happen
     # before the first event fires.
     monitor = DataDirMonitor(seed.NGT_DEV_HOME / "data") if args.monitor else None
@@ -463,19 +532,26 @@ def main():
 
     if monitor is None:
         _emit("Scenario finished.")
-        return None
+    else:
+        _emit(f"Scenario finished ({len(events)} events) -- Processing workflows may still be working.")
 
-    # keep monitoring until a user's signal
-    _emit(f"Scenario finished ({len(events)} events) -- Processing workflows may still be working.")
-    try:
-        input(">>> Still watching. Press Enter to stop and exit (Ctrl-C works too)... ")
-    except KeyboardInterrupt:
-        _emit("")  # step past the echoed ^C
-    except EOFError:
-        _emit("(stdin closed -- not waiting.)")
-    monitor.stop()
-    _emit(f"Stopped watching {monitor.root}.")
-    return None
+    # The settle wait runs while --monitor's watcher thread keeps reporting, so the files
+    # behind each upload still show up as they land.
+    result = None
+    if expectations is not None:
+        result = check_expectations(expectations, name=str(args.scenario), skip=uploads_before)
+
+    if monitor is not None:
+        # keep monitoring until a user's signal
+        try:
+            input(">>> Still watching. Press Enter to stop and exit (Ctrl-C works too)... ")
+        except KeyboardInterrupt:
+            _emit("")  # step past the echoed ^C
+        except EOFError:
+            _emit("(stdin closed -- not waiting.)")
+        monitor.stop()
+        _emit(f"Stopped watching {monitor.root}.")
+    return result
 
 
 if __name__ == "__main__":

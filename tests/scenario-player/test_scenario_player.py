@@ -5,6 +5,7 @@ tests never touch $NGT_DEV_HOME or the filesystem: scenario-player/seed.py's act
 seed_run/add_ls/end_run are monkeypatched out so we can assert purely on
 event ordering/timing and on what scenario_player would have called.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ SCENARIO_PLAYER_DIR = REPO_ROOT / "scenario-player"
 if str(SCENARIO_PLAYER_DIR) not in sys.path:
     sys.path.insert(0, str(SCENARIO_PLAYER_DIR))
 
+import fake_conddb  # noqa: E402
 import scenario_player  # noqa: E402
 
 
@@ -313,6 +315,9 @@ def test_timed_playback_sleeps_and_never_prompts(monkeypatch):
         (["--interactive", "--speed", "5"], "--speed has no meaning"),
         (["--speed", "0"], "must be positive"),
         (["--monitor", "--dry-run"], "--monitor has no meaning"),
+        (["--validate-only", "--no-validate"], "mutually exclusive"),
+        (["--validate-only", "--interactive"], "--validate-only plays nothing"),
+        (["--validate-only", "--speed", "2"], "--validate-only plays nothing"),
     ],
 )
 def test_main_rejects_contradictory_flag_combinations(monkeypatch, capsys, flags, expected_error):
@@ -373,6 +378,7 @@ def test_only_list_calibrations_prints_nothing_for_a_scenario_with_no_runs(monke
         ["--interactive", "--speed", "5"],
         ["--monitor", "--dry-run"],
         ["--speed", "0"],
+        ["--validate-only", "--no-validate"],
     ],
 )
 def test_only_list_calibrations_ignores_every_other_flag(monkeypatch, capsys, tmp_path, ignored_flags):
@@ -392,6 +398,47 @@ def test_only_list_calibrations_ignores_every_other_flag(monkeypatch, capsys, tm
     assert scenario_player.main() is None
     assert capsys.readouterr().out.splitlines() == ["SiStripBad"]
     assert calls == []
+
+
+@pytest.mark.parametrize("extra_flags", [[], ["--only-list-calibrations"]])
+def test_main_reports_a_malformed_scenario_with_exit_2(monkeypatch, capsys, tmp_path, extra_flags):
+    # Overlapping runs: one line on stderr, no traceback -- also before live_demo.sh starts loops.
+    calls = _record_seed_calls(monkeypatch)
+    scenario = _write_scenario(
+        tmp_path,
+        {
+            "runs": [
+                {"calibrations": ["SiStripBad"], "run": 1, "start_offset": 0, "end_after": 100},
+                {"calibrations": ["SiStripBad"], "run": 2, "start_offset": 50, "end_after": 100},
+            ]
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario), *extra_flags])
+
+    assert scenario_player.main() == scenario_player.EXIT_BAD_SCENARIO
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert str(scenario) in captured.err and "Traceback" not in captured.err
+    assert calls == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the ledger writer uses fcntl.flock")
+def test_main_checks_only_the_uploads_made_during_this_play(monkeypatch, tmp_path):
+    monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
+    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
+    fake_conddb.append_payload({"calibration": "EcalPedestals", "run": 1, "lumisections": [1]})  # an earlier play's
+    _record_seed_calls(monkeypatch)
+    monkeypatch.setattr(scenario_player.time, "sleep", lambda seconds: None)
+    scenario = _write_scenario(
+        tmp_path,
+        {
+            "runs": [{"calibrations": ["EcalPedestals"], "run": 1, "lumisections": [{"ls": 1}]}],
+            "expect": {"quiet_for": 0.1, "payloads": []},
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario)])
+
+    assert scenario_player.main() == scenario_player.EXIT_OK
 
 
 def _monitor(tmp_path, **kwargs):
