@@ -281,6 +281,37 @@ and `status` print them), and `status`, `stop-all` and `reset` only see their ow
 `NGT_INSTANCE` follows the checkout and `NGT_DEV_HOME`, so two checkouts -- or two `NGT_DEV_HOME`s
  of one -- run their demos side by side. Use the same `NGT_DEV_HOME` in every command of one demo.
 
+## The `ngt_calibration_loop` library
+
+The decision logic of the three loops -- OMS/EOS querying, run latching, lumisection/file
+batching and timeouts, cmsDriver script preparation -- is also available as plain functions with
+no orchestration dependency in `ngt_calibration_loop/` (`step2.py`/`step3.py`/`step4.py` hold
+each step's logic; `config.py`, `oms.py`, `eos.py` and `shell.py` are shared helpers). They keep
+their state on disk instead of in memory, and Step 3/4 job directories are named from a content
+hash of their input files (`alcaPromptJob_<hash>`, `harvestJob_<hash>`) instead of a counter, so
+a retried job reproduces the same directory instead of double-submitting.
+`shell.run_job_script` is the one seam that actually launches a job script, blocking until it
+completes (the FSM scripts' `subprocess.Popen(...)` never checked the result). `oms.run_end_time`
+asks OMS directly for a run's end time. Three give-up timers (`step_2_config.maxLatchTimeHours`,
+`step_3_config`/`step_4_config.timeoutSeconds`) can be overridden by optional calibrationYAML keys
+-- absent in the production calibrationYAML, so production behavior is unaffected.
+
+### Tests of the library and the simulator
+
+The same mocks as above apply, except that job launches are intercepted one level down:
+
+- `tests/fsm-loops/test_step{2,3,4}_lib.py` -- exercise `ngt_calibration_loop`'s functions directly: run
+  latching, batching thresholds, timeout/run-ended escape hatches, job prep/launch, and that a
+  failed launch raises so a caller can retry. `ngt_calibration_loop.shell.run_job_script` is
+  replaced by the `job_runner` fixture, a recorder that can also be told to raise on demand
+  (`job_runner.queue_failure()`).
+- `tests/scenario-player/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building
+  (ordering, concurrent-run merging) and playback (event firing order/arguments), with
+  `scenario-player/seed.py`'s functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access
+  needed.
+- `tests/scenario-player/test_faults.py`, `tests/ngt-calib-lib/test_job_faults.py`, `tests/ngt-calib-lib/test_oms_faults.py` -- the
+  declarative fault vocabulary (see "Fault injection" below).
+
 ## The offline simulator (`scenario-player/`)
 
 `scenario-player/` holds everything needed to simulate a live run without CERN infrastructure:
@@ -428,6 +459,44 @@ expect:
 Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_conddb.py` and
 `test_scenario_expectations.py`; `tests/fsm-loops/test_scenarios.py` checks the blocks of
 `basic_ecal_pedestals.yaml` and `fault_injection_demo.yaml` against the real loops.
+
+### Resetting the simulator's state and the give-up timers
+
+All simulator state lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory
+inside this repo):
+
+```bash
+./scenario-player/sim_env.sh reset   # wipes $NGT_DEV_HOME entirely
+./scenario-player/sim_env.sh setup   # recreates it (needs an active venv -- see note below)
+```
+
+`setup`'s `pip install -e tests/stubs` step needs **some** Python venv active first -- without
+one, Debian/Ubuntu's system Python refuses the install outright (PEP 668,
+`error: externally-managed-environment`); forgetting this fails fast with a clear message
+telling you to `source .../activate` first.
+
+**Caution**: `./scenario-player/sim_env.sh reset` deletes `$NGT_DEV_HOME` unconditionally, with
+no awareness of whether a process is currently running against it. Doing this while an engine
+has in-flight work polling paths under `$NGT_DEV_HOME` can leave that work stuck, and silently
+orphans the engine processes' own console logs (they keep writing to the now-unlinked files).
+Stop whatever is running against the environment first.
+
+`setup` also patches the give-up timers of the scratch calibrationYAML copies (see "The
+`ngt_calibration_loop` library"):
+
+| Variable                          | Default                          | Meaning                          |
+|-------------------------------------|-----------------------------------|-----------------------------------|
+| `NGT_TEST_MAX_LATCH_TIME_HOURS`      | `0.25` (production default: `8`) | how long a calibration keeps waiting on a run before giving up, hours |
+| `NGT_TEST_STEP_TIMEOUT_SECONDS`      | `900` (production default: `28800`) | same, for Step 3/Step 4's own give-up timers, seconds |
+
+Why they exist: step2/3/4 each wait up to several *production* hours (8h each) before giving
+up on a run/calibration that never reconciles -- correct for real OMS/EOS, but not something a
+live-test scenario should ever have to wait out (a scenario that seeds files for only one
+calibration still latches all three onto the same OMS-visible run, so the other two would
+otherwise wait for hours). The defaults (15 min) are deliberately well above any realistic
+scenario duration -- shortening them further risks a still-live, still-progressing run's own
+workflow getting force-finalized mid-scenario. Override either one to test the
+give-up-and-finalize path itself, or to give a deliberately long-running scenario more headroom.
 
 ## Public Presentations
 
