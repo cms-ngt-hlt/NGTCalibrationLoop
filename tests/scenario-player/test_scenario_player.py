@@ -555,6 +555,29 @@ def test_scenario_files_in_repo_parse_and_build_a_nonempty_timeline():
     assert saw_a_fault, "expected at least one committed scenario to exercise the faults: section"
 
 
+# --- expect: -------------------------------------------------------------------------
+
+
+def test_scenario_files_in_repo_all_declare_parseable_expectations():
+    """Every shipped scenario validates itself, and a typo in its expect: block fails here."""
+    import yaml
+
+    import expectations as ngt_expectations
+
+    for path in sorted((SCENARIO_PLAYER_DIR / "scenarios").glob("*.yaml")):
+        scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = scenario.get("expect")
+        assert raw is not None, f"{path.name} has no expect: block, so playing it asserts nothing"
+        parsed = ngt_expectations.parse_expectations(raw)
+
+        runs_played = {(cal, spec["run"]) for spec in scenario["runs"] for cal in spec["calibrations"]}
+        for entry in parsed.payloads:
+            assert entry.key in runs_played, (
+                f"{path.name} expects a payload for {entry.key} but never plays that "
+                f"(calibration, run) -- it could not possibly arrive"
+            )
+
+
 # --- faults: -------------------------------------------------------------------------
 
 CMSRUN_FAULT = {"target": "cmsrun", "mode": "exit_code", "exit_code": 139, "calibration": "EcalPedestals",

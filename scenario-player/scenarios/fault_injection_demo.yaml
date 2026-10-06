@@ -13,3 +13,12 @@ runs:
 faults:
   - {target: oms, mode: connection_error, run: 400000, at: 5, times: 2}
   - {target: upload_conditions, mode: exit_code, exit_code: 1, calibration: EcalPedestals, run: 400000, at: 10}
+
+# Step 4 re-harvests everything each cycle and uploads the final payload again when the run ends.
+expect:
+  settle_timeout: 1200
+  quiet_for: 120
+  allow_duplicates: true
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 400000, lumisections: 1-3}

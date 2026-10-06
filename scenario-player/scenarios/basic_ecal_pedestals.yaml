@@ -9,3 +9,12 @@ runs:
       - {ls: 52, after: 20}
       - {ls: 53, after: 20}
     end_after: 30
+
+# Step 4 re-harvests everything each cycle and uploads the final payload again when the run ends.
+expect:
+  settle_timeout: 600
+  quiet_for: 45
+  allow_duplicates: true
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 398600, lumisections: 51-53}
