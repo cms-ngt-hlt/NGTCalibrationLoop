@@ -486,9 +486,66 @@ def test_scenario_files_in_repo_parse_and_build_a_nonempty_timeline():
     scenarios_dir = SCENARIO_PLAYER_DIR / "scenarios"
     yaml_files = list(scenarios_dir.glob("*.yaml"))
     assert yaml_files, "expected at least one example scenario under scenario-player/scenarios/"
+    saw_a_fault = False
     for path in yaml_files:
         scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
         events = scenario_player.build_timeline(scenario)
         assert events, f"{path} produced an empty timeline"
         # Timeline must already be sorted (build_timeline's own contract).
         assert [e.at for e in events] == sorted(e.at for e in events)
+        saw_a_fault = saw_a_fault or any(e.kind == "fault" for e in events)
+    assert saw_a_fault, "expected at least one committed scenario to exercise the faults: section"
+
+
+# --- faults: -------------------------------------------------------------------------
+
+CMSRUN_FAULT = {"target": "cmsrun", "mode": "exit_code", "exit_code": 139, "calibration": "EcalPedestals",
+                "run": 398600, "step": "step2"}
+
+
+def test_build_timeline_interleaves_faults_with_run_events():
+    scenario = {
+        "runs": [{"calibrations": ["EcalPedestals"], "run": 398600, "start_offset": 0, "end_after": 100}],
+        "faults": [{"target": "oms", "mode": "timeout"}, {**CMSRUN_FAULT, "at": 50}],
+    }
+    events = scenario_player.build_timeline(scenario)
+
+    assert [(e.at, e.kind) for e in events] == [(0, "start_run"), (0, "fault"), (50, "fault"), (100, "end_run")]
+    assert events[1].fault.mode == "timeout"  # `at` defaults to 0
+    assert events[2].fault == scenario_player.ngt_faults.parse_fault_spec(CMSRUN_FAULT)
+    assert events[2].describe() == (
+        "arm-fault --target cmsrun --mode exit_code (calibration=EcalPedestals, run=398600, step=step2)"
+    )
+
+
+def test_build_timeline_rejects_invalid_fault_entry():
+    with pytest.raises(ValueError, match="target"):
+        scenario_player.build_timeline({"faults": [{"target": "bogus", "mode": "timeout"}]})
+
+
+def test_only_list_calibrations_skips_fault_events(monkeypatch, capsys, tmp_path):
+    # An oms fault has no calibration at all (sorting None alongside names would raise), and a
+    # scoped cmsrun fault names a calibration whose loops only its runs could need.
+    scenario = _write_scenario(
+        tmp_path,
+        {
+            "runs": [{"calibrations": ["EcalPedestals"], "run": 1, "end_after": 10}],
+            "faults": [{"target": "oms", "mode": "timeout", "at": 1}, {**CMSRUN_FAULT, "calibration": "BeamSpot"}],
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario), "--only-list-calibrations"])
+
+    assert scenario_player.main() is None
+    assert capsys.readouterr().out.splitlines() == ["EcalPedestals"]
+
+
+def test_play_arms_the_parsed_fault(monkeypatch):
+    calls = []
+    monkeypatch.setattr(scenario_player.seed, "arm_fault", calls.append)
+    monkeypatch.setattr(scenario_player.time, "sleep", lambda _seconds: None)
+
+    events = scenario_player.build_timeline({"faults": [{**CMSRUN_FAULT, "times": 2, "at": 1}]})
+    scenario_player.play(events, log=lambda _msg: None)
+
+    assert calls == [events[0].fault]
+    assert calls[0].times == 2

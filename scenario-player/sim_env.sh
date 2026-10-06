@@ -54,7 +54,7 @@ sim_setup() {
     return 1
   fi
 
-  mkdir -p "$NGT_DEV_HOME"/{data,logs,cond_auth,calibrationYAML,eos}
+  mkdir -p "$NGT_DEV_HOME"/{data,logs,cond_auth,calibrationYAML,eos,faults}
   mkdir -p "$NGT_DEV_HOME/cmssw_home/CMSSW_16_0_7_patch1/src"
 
   cat > "$NGT_DEV_HOME/ngtParameters.jsn" <<JSON
@@ -76,7 +76,11 @@ export NGT_PARAMETERS_PATH="$NGT_DEV_HOME/ngtParameters.jsn"
 export NGT_CALIBRATION_YAML_DIR="$NGT_DEV_HOME/calibrationYAML"
 export NGT_OMS_STUB_RUNS_FILE="$NGT_DEV_HOME/oms_runs.json"
 export PATH="$REPO_DIR/scenario-player/bin:\$PATH"
-export PYTHONPATH="$REPO_DIR/tests/stubs:\${PYTHONPATH:-}"
+# scenario-player/ for the fake omsapi's live fault path, which imports faults.py.
+export PYTHONPATH="$REPO_DIR/tests/stubs:$REPO_DIR/scenario-player:\${PYTHONPATH:-}"
+
+# Where seed.py's arm_fault() leaves faults; the fakes only look for them when this is set.
+export NGT_FAULTS_DIR="$NGT_DEV_HOME/faults"
 
 # A real CMSSW environment provides cmsenv/cmsrel as shell *functions*, and bash
 # resolves a function before it searches \$PATH -- an exported one survives into
@@ -118,6 +122,7 @@ _install_omsapi_stub() {
 # is watching it. Does NOT recreate it afterward (call sim_setup for that) and
 # does NOT touch any engine's own state -- an engine that keeps run-history
 # outside $NGT_DEV_HOME needs its own separate reset too.
+# Stop the engine first: running processes keep pointing at the deleted state.
 sim_reset() {
   echo "Removing $NGT_DEV_HOME"
   rm -rf "$NGT_DEV_HOME"

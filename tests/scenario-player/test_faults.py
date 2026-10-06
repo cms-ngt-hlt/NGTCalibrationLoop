@@ -75,6 +75,16 @@ def test_scope_matches():
     assert faults.scope_matches({"run": 398600}, {**scope, "run": "398600"})  # compared as strings
 
 
+@pytest.mark.parametrize(
+    "job_dir, step",
+    [("", "step2"), ("/alcaPromptJob000", "step3"), ("/harvestJob001", "step4"), ("/other", None)],
+)
+def test_scope_from_cwd_reads_the_loops_directory_layout(job_dir, step):
+    scope = faults.scope_from_cwd(f"/data/EcalPedestals/run398600{job_dir}")
+    assert scope == {"calibration": "EcalPedestals", "run": "398600", "step": step}
+    assert faults.scope_from_cwd("/tmp/not-a-run-dir") == {}
+
+
 def _armed(tmp_path, *entries):
     path = tmp_path / "cmsrun.json"
     faults.atomic_write_json(path, list(entries))

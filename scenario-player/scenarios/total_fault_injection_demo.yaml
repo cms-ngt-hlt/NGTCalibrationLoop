@@ -1,0 +1,16 @@
+# One run feeding two calibrations, only one of them faulted: EcalPedestals' uploads fail and its
+# Step 2 cmsRun crashes from LS 2 on, each up to six times. SiStripBad shares the run but none of
+# the faults.
+runs:
+  - calibrations: [EcalPedestals, SiStripBad]
+    run: 400001
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+    end_after: 20
+
+faults:
+  - {target: upload_conditions, mode: exit_code, exit_code: 1, calibration: EcalPedestals, run: 400001, at: 5, times: 6}
+  - {target: cmsrun, mode: exit_code, exit_code: 139, calibration: EcalPedestals, run: 400001, step: step2, at: 10, times: 6}

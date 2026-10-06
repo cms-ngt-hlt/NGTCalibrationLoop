@@ -54,3 +54,12 @@ def test_env_sh_runs_the_fakes_from_the_checkout(env_sh):
     found = _sourced(env_sh, "command -v cmsRun")
     assert Path(found).resolve() == (REPO_ROOT / "scenario-player" / "bin" / "cmsRun").resolve()
     assert not (env_sh / "bin").exists()
+
+
+def test_env_sh_wires_up_fault_injection(env_sh):
+    """Without NGT_FAULTS_DIR the fakes never look for armed faults, so a scenario's faults: would be
+    silently inert for live_demo.sh's loops; the fake omsapi imports scenario-player/faults.py, which
+    only env.sh's PYTHONPATH lets a loop's own Python find."""
+    assert _sourced(env_sh, 'echo "$NGT_FAULTS_DIR"') == str(env_sh / "faults")
+    found = _sourced(env_sh, f'"{sys.executable}" -c "import omsapi, faults; print(faults.__file__)"')
+    assert Path(found).resolve() == (REPO_ROOT / "scenario-player" / "faults.py").resolve()

@@ -12,6 +12,7 @@ loops. Standard library only, so the fakes in bin/ can import it.
 
 import json
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -200,3 +201,26 @@ def consume_fault(path, scope):
     if matched is not None:
         atomic_write_json(path, entries)
     return matched
+
+
+def scope_from_cwd(cwd):
+    """{calibration, run, step} of a job the loops run in `cwd`: Step 2 in <data>/<calibration>/run<N>/,
+    Steps 3 and 4 one level deeper, in alcaPromptJob<NNN>/ and harvestJob<NNN>/."""
+    parts = str(cwd).replace("\\", "/").rstrip("/").split("/")
+    i = next((i for i, part in enumerate(parts) if re.fullmatch(r"run\d+", part)), None)
+    if i is None:
+        return {}
+    job = parts[i + 1] if i + 1 < len(parts) else ""
+    step = "step3" if job.startswith("alcaPromptJob") else "step4" if job.startswith("harvestJob") else None
+    return {"calibration": parts[i - 1] if i else None, "run": parts[i][3:], "step": step if job else "step2"}
+
+
+def consume_armed(target):
+    """The fault armed in $NGT_FAULTS_DIR/<target>.json for a job running in the current directory, with
+    one use counted off -- None if NGT_FAULTS_DIR is unset or nothing matches. What the fakes in bin/ call."""
+    faults_dir = os.environ.get("NGT_FAULTS_DIR")
+    if not faults_dir:
+        return None
+    path = os.path.join(faults_dir, f"{target}.json")
+    with locked_json_file(path):
+        return consume_fault(path, scope_from_cwd(os.getcwd()))
