@@ -64,9 +64,14 @@ Running Airflow (one shared instance, tmux sessions NGTAirflow*):
   logs <scheduler|dag-processor|api|triggerer>   Tail -f that process's tmux console log
 
 DAG control:
+  unpause-watch                           Unpause ngt_dags_watch.py's 4 DAGs (starts the AssetWatchers)
+  pause-watch                             Pause them again (stops the AssetWatchers)
 
 Resetting state (see scenario-player/sim_env.sh's setup/reset for the simulator's OWN state --
 \$NGT_DEV_HOME -- which none of these touch, except reset-scenario):
+  reset-watch                             Clear DAG-run history for ngt_dags_watch.py's 4 DAGs
+                                          (also drops the ngt://runs / ngt://files/* Assets +
+                                          their AssetStateStore rows)
   reset-airflow                           Full reset: drop + recreate the whole metadata DB
                                           (DAG-run history, variables, connections --
                                           everything) and re-migrate. Back to freshly-installed.
@@ -75,8 +80,12 @@ Resetting state (see scenario-player/sim_env.sh's setup/reset for the simulator'
                                           running -- calling sim_env.sh's reset directly while
                                           Airflow's processes are live can leave in-flight
                                           deferred work stuck; this is the safe way to do it from
-                                          this adapter. Does NOT touch DAG-run history -- pair
-                                          with reset-watch/-airflow if you want that too.
+                                          this adapter. Also clears ngt_dags_watch.py's
+                                          AssetStateStore watermarks (seen_runs / emitted_run<N>),
+                                          which would otherwise describe fake run/file state this
+                                          just wiped -- without touching the Assets themselves or
+                                          any DAG-run history. Pair with reset-watch/
+                                          -airflow if you want DAG-run history cleared too.
 
 Driving a fake run (edits \$NGT_DEV_HOME/oms_runs.json + drops fake RAW files,
 identical to any other engine adapter -- delegates straight to scenario-player/seed.py):
@@ -222,6 +231,102 @@ cmd_stop() {
   done
 }
 
+cmd_pause_unpause_watch() {
+  # ngt_dags_watch.py's 4 DAGs (the all-static-asset AssetWatcher design -- see
+  # its module docstring). AssetWatchers only run while their consuming DAG is
+  # unpaused, so this is also what starts/stops the 4 watchers in the
+  # triggerer. Unpause the process DAGs (file watchers) first, then the primer
+  # (run watcher), so the file watchers are live before a run is discovered.
+  local action="$1"
+  activate_venv
+  for calibration in "${CALIBRATIONS[@]}"; do
+    local lower; lower="$(echo "$calibration" | tr '[:upper:]' '[:lower:]')"
+    airflow dags "$action" -y "ngt_watch_process_${lower}"
+  done
+  airflow dags "$action" -y "ngt_watch_run_primer"
+}
+
+_reset_ngt_assets() {
+  # $1 label; $2/$3 AssetModel.uri LIKE patterns to remove. asset_state_store rows go
+  # with the AssetModel via ON DELETE CASCADE. A dev-script admin action, not task code
+  # (Airflow 3 forbids ORM access from task code, but this is a dev script); skipped with a
+  # warning if the ORM shape has drifted rather than failing the whole reset.
+  local label="$1" uri_a="$2" uri_b="$3"
+  URI_A="$uri_a" URI_B="$uri_b" python3 - <<'PY' || echo "  (Asset row cleanup skipped for $label -- use reset-airflow for a full wipe)"
+import os
+from airflow.utils.session import create_session
+from airflow.models.asset import AssetActive, AssetEvent, AssetModel
+from sqlalchemy import or_
+
+with create_session() as session:
+    q = session.query(AssetModel).filter(
+        or_(AssetModel.uri.like(os.environ["URI_A"]), AssetModel.uri.like(os.environ["URI_B"]))
+    )
+    assets = q.all()
+    ids = [a.id for a in assets]
+    uris = [a.uri for a in assets]
+    if ids:
+        session.query(AssetEvent).filter(AssetEvent.asset_id.in_(ids)).delete(synchronize_session=False)
+        session.query(AssetActive).filter(AssetActive.uri.in_(uris)).delete(synchronize_session=False)
+        session.query(AssetModel).filter(AssetModel.id.in_(ids)).delete(synchronize_session=False)
+    print(f"  Removed {len(ids)} Asset row(s).")
+PY
+}
+
+_reset_ngt_watermarks() {
+  # Clears just the asset_state_store rows (seen_runs / emitted_run<N> watermarks --
+  # triggers.py's _watermark_get/_set/_delete) for ngt://runs and ngt://files/<cal>, leaving the
+  # AssetModel rows -- and therefore DAG-run history and pause state -- untouched. Unlike
+  # _reset_ngt_assets (used by reset-watch), this does NOT cascade-delete the Asset itself; it's
+  # the surgical counterpart used by reset-scenario, which has no reason to touch DAG state.
+  #
+  # Needed because these watermarks live in the Airflow metadata DB, scoped to the Asset row --
+  # sim_env.sh's reset+setup only knows about $NGT_DEV_HOME, so without this a run/file number
+  # reused after a reset-scenario (e.g. replaying the same scenario after a botched attempt)
+  # looks "already seen"/"already emitted" to ngt_dags_watch.py's watchers forever, even though
+  # the fake data backing that watermark is gone. A dev-script admin action, not task code (cf.
+  # dev script, not task code); skipped with a warning, same as _reset_ngt_assets, if
+  # the ORM shape has drifted rather than failing the whole reset. Expects activate_venv to have
+  # already run (mirrors _reset_ngt_assets).
+  python3 - <<'PY' || echo "  (AssetStateStore cleanup skipped -- use reset-watch for a full wipe)"
+from airflow.utils.session import create_session
+from airflow.models.asset import AssetModel
+from airflow.models.asset_state_store import AssetStateStoreModel
+from sqlalchemy import or_
+
+with create_session() as session:
+    ids = [
+        a.id
+        for a in session.query(AssetModel).filter(
+            or_(AssetModel.uri.like("ngt://runs%"), AssetModel.uri.like("ngt://files/%"))
+        )
+    ]
+    removed = 0
+    if ids:
+        removed = (
+            session.query(AssetStateStoreModel)
+            .filter(AssetStateStoreModel.asset_id.in_(ids))
+            .delete(synchronize_session=False)
+        )
+    print(f"  Removed {removed} AssetStateStore row(s) (seen_runs / emitted_run<N> watermarks).")
+PY
+}
+
+cmd_reset_watch() {
+  # Clears ngt_dags_watch.py's 4 DAGs + its 4 static
+  # Assets (ngt://runs, ngt://files/<cal>). Their AssetStateStore rows (the
+  # watchers' "seen runs" / "emitted files" watermarks) are removed with the
+  # AssetModel via ON DELETE CASCADE.
+  activate_venv
+  airflow dags delete -y ngt_watch_run_primer
+  for calibration in "${CALIBRATIONS[@]}"; do
+    local lower; lower="$(echo "$calibration" | tr '[:upper:]' '[:lower:]')"
+    airflow dags delete -y "ngt_watch_process_${lower}"
+  done
+  _reset_ngt_assets "ngt_dags_watch.py" "ngt://runs%" "ngt://files/%"
+  echo "Cleared DAG-run history for all 4 ngt_watch_* DAGs (ngt_dags_watch.py)."
+}
+
 cmd_reset_airflow() {
   # Drops and recreates the whole metadata DB schema -- all DAG-run
   # history, variables, connections, everything -- not just this repo's DAGs.
@@ -268,6 +373,12 @@ cmd_reset_scenario() {
   # know or check any of this (see their comments) -- that coordination lives
   # here, in the Airflow-specific adapter, on purpose. Doesn't touch DAG-run
   # history -- pair with reset-watch/reset-airflow for that.
+  #
+  # Does clear ngt_dags_watch.py's AssetStateStore watermarks (_reset_ngt_watermarks), though:
+  # they live in the Airflow metadata DB, scoped to the Asset row, so sim_env.sh's reset+setup
+  # can't reach them, and left alone they'd keep describing fake run/file state this just wiped
+  # (see _reset_ngt_watermarks' own comment). That's the only Airflow-DB side effect here --
+  # it only touches the watermark rows, not the Assets/DAG history/pause state.
   local was_running=0
   if tmux has-session -t NGTAirflowScheduler 2>/dev/null; then
     was_running=1
@@ -277,6 +388,7 @@ cmd_reset_scenario() {
   sim_reset
   activate_venv
   sim_setup
+  _reset_ngt_watermarks
   echo "Reset and re-set-up $NGT_DEV_HOME."
 
   if [ "$was_running" = "1" ]; then
@@ -292,6 +404,9 @@ case "${1:-}" in
   status) cmd_status ;;
   ui) cmd_ui ;;
   logs) cmd_logs "${2:?scheduler, dag-processor, or api required}" ;;
+  unpause-watch) cmd_pause_unpause_watch unpause ;;
+  pause-watch) cmd_pause_unpause_watch pause ;;
+  reset-watch) cmd_reset_watch ;;
   reset-airflow) cmd_reset_airflow ;;
   reset-scenario) cmd_reset_scenario ;;
   seed-run)
