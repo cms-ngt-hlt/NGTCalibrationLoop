@@ -484,7 +484,7 @@ Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_con
 ### Resetting the simulator's state and the give-up timers
 
 All simulator state lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory
-inside this repo):
+inside this repo), including the `conddb/` upload ledger:
 
 ```bash
 ./scenario-player/sim_env.sh reset   # wipes $NGT_DEV_HOME entirely
@@ -676,11 +676,15 @@ CERN/CMS project reports, not this repo's mocked dev environment).
 - `scenario-player/` -- the engine-agnostic offline simulator, see "The offline simulator" above:
   `sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and
   `scenario_player.py` (driving/replaying fake runs, with `scenarios/*.yaml`), `faults.py` (the
-  shared fault-injection vocabulary) and `bin/` (the fake `cmsRun`/`cmsDriver.py`/... toolchain).
+  shared fault-injection vocabulary), `expectations.py` and `fake_conddb.py` (the `expect:` vocabulary
+  and the dummy conditions DB a scenario's result is validated against, see "Validating the
+  result" above; it also defines the provenance/ledger formats the fakes write) and `bin/` (the
+  fake `cmsRun`/`cmsDriver.py`/... toolchain).
   Nothing in it imports or knows about Airflow specifically, so the same scratch environment and
   scenario files drive both the FSM loops (`live_demo.sh`) and Airflow unchanged -- see `sim_env.sh`'s header
   comment for why that split exists. It's not a Python package (hence the hyphen): `faults.py`,
-  `seed.py` and `scenario_player.py` are top-level modules found via `sys.path`
+  `seed.py`, `fake_conddb.py`, `expectations.py` and `scenario_player.py` are top-level modules found
+  via `sys.path`
   (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh` for the fake `omsapi`'s live fault path).
 
 ### Directory structure produced by a run
@@ -780,7 +784,8 @@ delete it any time to reset the demo environment (the Airflow instance itself --
 
 Two independent layers of state can go stale, and clearing one doesn't clear the other:
 
-- **The simulator's own state** (`$NGT_DEV_HOME`: fake OMS runs, EOS files, output data, logs)
+- **The simulator's own state** (`$NGT_DEV_HOME`: fake OMS runs, EOS files, output data, logs,
+  and the `conddb/` upload ledger)
   -- see "Resetting the simulator's state and the give-up timers" above. `airflow_demo.sh setup`
   (which calls the same `sim_setup` internally) always activates `~/airflow3-ngt-venv` itself
   first. **Caution**: `./scenario-player/sim_env.sh reset` while Airflow is running is not safe
