@@ -7,6 +7,12 @@ This directory implements the calibration leg workflow of our NGT demonstrator. 
 - **Step 3**: Monitors for step 2 output files, merges them, produces ALCARECO root files
 - **Step 4**: Monitors for step 3 output files, performs harvesting, produces and uploads final payload to condDB to be consumed by the NGT Global Tag
 
+The same processing logic is also extracted into the stateless `ngt_calibration_loop` package
+(`ngt_calibration_loop/step{2,3,4}.py`), which an **Apache Airflow** prototype
+(`airflow_automation/airflow_dags/`) orchestrates instead of the FSMs' `while True` polling
+loops. See "Why Airflow" below for the motivation. The batching/latching *logic* is unchanged
+from the FSMs, only how it's scheduled and retried.
+
 ### Workflow Data Flow
 
 ```
@@ -295,6 +301,9 @@ completes (the FSM scripts' `subprocess.Popen(...)` never checked the result). `
 asks OMS directly for a run's end time. Three give-up timers (`step_2_config.maxLatchTimeHours`,
 `step_3_config`/`step_4_config.timeoutSeconds`) can be overridden by optional calibrationYAML keys
 -- absent in the production calibrationYAML, so production behavior is unaffected.
+`original_fsm_only/` holds the few functions only the original FSM orchestration used (the Step
+3/4 run-directory scan, Step 3's witness-file batching decision) -- no Airflow design calls them,
+they're kept, tested, but out of the step modules the DAGs import.
 
 ### Tests of the library and the simulator
 
@@ -305,12 +314,24 @@ The same mocks as above apply, except that job launches are intercepted one leve
   failed launch raises so a caller can retry. `ngt_calibration_loop.shell.run_job_script` is
   replaced by the `job_runner` fixture, a recorder that can also be told to raise on demand
   (`job_runner.queue_failure()`).
+- `tests/ngt-calib-lib/test_original_fsm_only.py` -- the same style of tests for
+  `ngt_calibration_loop/original_fsm_only/` (run-directory scan, Step 3's witness-file batching
+  decision).
 - `tests/scenario-player/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building
   (ordering, concurrent-run merging) and playback (event firing order/arguments), with
   `scenario-player/seed.py`'s functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access
   needed.
 - `tests/scenario-player/test_faults.py`, `tests/ngt-calib-lib/test_job_faults.py`, `tests/ngt-calib-lib/test_oms_faults.py` -- the
   declarative fault vocabulary (see "Fault injection" below).
+- `tests/airflow-ngt/test_dags_watch.py` -- DagBag import-error/structure checks for the
+  AssetWatcher design, the two watcher triggers' async `run()` driven to completion against a
+  fake `AssetStateStore` (plain `asyncio.run()` calls -- no `pytest-asyncio` needed), and direct
+  unit tests of each task's `python_callable`, including a chain smoke test that drives one file
+  through all four of them. No live Airflow scheduler/DB/API server needed. Guarded by
+  `pytest.importorskip("airflow")`, so it's automatically skipped wherever `apache-airflow` isn't
+  installed (e.g. a plain Windows `.venv`) and the rest of the suite still runs. Where Airflow
+  *is* installed, run `source airflow_automation/airflow_demo/airflow_env.sh` first so
+  `import airflow` picks up the right `AIRFLOW_HOME`/DB config.
 
 ## The offline simulator (`scenario-player/`)
 
@@ -479,7 +500,9 @@ telling you to `source .../activate` first.
 no awareness of whether a process is currently running against it. Doing this while an engine
 has in-flight work polling paths under `$NGT_DEV_HOME` can leave that work stuck, and silently
 orphans the engine processes' own console logs (they keep writing to the now-unlinked files).
-Stop whatever is running against the environment first.
+Stop whatever is running against the environment first (with Airflow, use
+`./airflow_automation/airflow_demo/airflow_demo.sh reset-scenario` instead -- see "Resetting state"
+under "Running a live demo with Airflow").
 
 `setup` also patches the give-up timers of the scratch calibrationYAML copies (see "The
 `ngt_calibration_loop` library"):
@@ -497,6 +520,380 @@ otherwise wait for hours). The defaults (15 min) are deliberately well above any
 scenario duration -- shortening them further risks a still-live, still-progressing run's own
 workflow getting force-finalized mid-scenario. Override either one to test the
 give-up-and-finalize path itself, or to give a deliberately long-running scenario more headroom.
+
+## Why Airflow
+
+The original FSM scripts launched CMSSW jobs (and, in Step 4, the production condDB upload)
+via `subprocess.Popen(...)` and never checked the result -- a failed job just vanished, with
+no retry and no monitoring beyond grepping log files. Airflow gives every launched job real
+retries, timeouts, and UI/task-history visibility, and decouples Step 4's condDB upload from
+its harvesting run so a transient upload failure retries on its own without redoing
+ALCAHARVEST.
+
+**Design**: every CMSSW job is launched **synchronously** from an Airflow task, with retries and
+a timeout (this is the actual fix -- an Airflow task can safely block on a job the way the old
+Popen-based loop couldn't), and Step 4's condDB upload is a separate `step4_upload` task with
+its own retry policy. The DAG structure built on this -- an event-driven `AssetWatcher`
+design, see "Airflow DAG design" below -- runs one input
+file through Step 2 -> Step 3 -> Step 4 as a straight
+`step2_express >> step3_alca >> step4_harvest >> step4_upload` chain. Lumisection/file arrival is
+only a *trigger signal* for processing; Step 4 re-harvests *all* accumulated ALCARECO files
+together every time, so more statistics improve the payload.
+
+Two behavior changes from the original FSM were needed because Airflow DAG runs, unlike the
+old long-lived process, don't keep in-memory state across cycles:
+1. Step 3/4 job directories (`alcaPromptJob_<hash>`, `harvestJob_<hash>`) are named from a
+   content hash of their input files instead of a monotonic counter, so a retried task
+   reproduces the same directory instead of double-submitting.
+2. "Already processed" bookkeeping (`allLSProcessed.log` etc.) is written incrementally after
+   every cycle instead of only at final cleanup, and read back at the top of each new cycle.
+
+**Airflow 3 note**: this design needs no cross-DAG coordination from task code at all --
+hand-offs happen through Asset events, not by one DAG triggering another. That matters under
+Airflow 3, which no longer permits `airflow.api.common.trigger_dag` or direct `DagRun`/
+`TaskInstance` ORM queries from task code (what this repo did under Airflow 2 -- see its
+"Upgrading to Airflow 3" docs on removed direct database access). The demo instance's own auth
+uses the Simple Auth Manager's zero-credential admin-token mode, appropriate for this offline
+single-user dev instance specifically (see `airflow_automation/airflow_demo/airflow_env.sh`).
+
+**Scope note**: this is built and fully tested against the offline fake OMS/EOS/CMSSW
+toolchain (`scenario-player/bin/`, `tests/stubs/`, `scenario-player/seed.py`) -- the same one the project's pytest
+suite and live demo already used before this migration. Deploying it onto the real CERN P5
+calibration nodes (real OMS, real EOS/kerberos, real CMSSW, real condDB) is a separate,
+not-yet-done step; see "Deploying on the calibration nodes" below for what that would involve.
+The FSM scripts above remain the "functioning" version used for the demonstrator in the 2025
+data taking; this Airflow-based version (migrated from its original Airflow 2.10.5
+implementation to Airflow 3.3.1) is the planned improvement for 2026 data-taking.
+
+## Setting up and running Airflow
+
+Airflow has no official Windows support -- run it from a Linux host (WSL works fine on
+Windows). This repo targets **Airflow 3.3.1** on Python 3.12, with `LocalExecutor` against a
+local Postgres instance (needed for real task parallelism across the DAGs; SQLite only
+supports `SequentialExecutor`, which would serialize every task across every
+calibration).
+
+```bash
+# 1. Airflow venv (separate from the repo's .venv used for plain pytest)
+python3 -m venv ~/airflow3-ngt-venv
+source ~/airflow3-ngt-venv/bin/activate
+pip install "apache-airflow==3.3.1" \
+  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.1/constraints-3.12.txt"
+pip install psycopg2-binary asyncpg    # asyncpg: Airflow 3 also opens an async
+                                        # engine against the metadata DB
+pip install -e .                       # ngt_calibration_loop, used by the DAGs
+pip install -e tests/stubs             # the omsapi test-stub, see its note below
+
+# 2. Postgres (one-time, needs sudo). Named distinctly from any pre-existing
+#    Airflow 2.x install's database rather than reusing it in place -- see
+#    airflow_automation/airflow_demo/airflow_env.sh's comment for why.
+sudo apt-get install -y postgresql
+sudo -u postgres psql -c "CREATE ROLE airflow_ngt WITH LOGIN PASSWORD 'airflow_ngt';"  # skip if it already exists
+sudo -u postgres psql -c "CREATE DATABASE airflow3_ngt OWNER airflow_ngt;"
+
+# 3. Initialize Airflow against that DB
+source airflow_automation/airflow_demo/airflow_env.sh              # AIRFLOW_HOME, executor, DB, DAGs folder, auth
+airflow db migrate
+```
+
+No `airflow users create` step: `airflow_automation/airflow_demo/airflow_env.sh` sets
+`AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=True`, so Airflow 3's Simple Auth Manager (the
+new default, replacing FAB) treats every request as admin with no login at all -- appropriate
+for this offline, single-user dev/demo instance specifically (that auth manager is explicitly
+documented as development/testing-only, which is exactly what this is), not something to carry
+into a real deployment.
+
+Why `pip install -e tests/stubs`: the fake `omsapi` package (see below) needs to be importable
+by Airflow's scheduler subprocesses. `PYTHONPATH` set in the launching shell was not reliably
+observed to reach those forked/spawned subprocesses in testing, so the stub is installed as a
+real (tiny) package instead -- see `scenario-player/sim_env.sh`'s `sim_setup` for the note.
+
+`airflow_automation/airflow_demo/airflow_demo.sh setup`/`start`/`stop`/`unpause` wrap steps 1-3 above and the day-to-day
+process lifecycle -- see "Running a live demo with Airflow" below for the full walkthrough. Airflow 3 splits
+DAG parsing out of the scheduler into its own mandatory `airflow dag-processor` process (the
+scheduler no longer spawns it itself, unlike Airflow 2), so `start`/`stop`/`status` manage four
+processes (scheduler, dag-processor, API server, triggerer) instead of the original two. The
+triggerer hosts the AssetWatcher design's watchers -- see "Airflow DAG design" below -- but is
+started unconditionally since it's harmless when unused.
+
+### Deploying on the calibration nodes
+
+Not done as part of this migration -- would need, on `ngtcalfu-c2b05-{43,44}-01.cms` (or
+wherever Airflow itself runs, which does not need to be the same host CMSSW/EOS access is
+needed on, since `launch_job`/`upload_conditions` just run local shell scripts): the real
+`oms-api-client` (`git clone ssh://git@gitlab.cern.ch:7999/cmsoms/oms-api-client.git`, `cp -r
+oms-api-client/omsapi` next to `ngt_calibration_loop/`, same as the old `NGTLoopStep2.py` setup
+required) instead of `tests/stubs/omsapi`, the kerberos cron job from the original setup
+instructions for EOS access, `COND_AUTH_PATH` credentials for the condDB upload, and a
+production-grade Airflow deployment (Postgres/MySQL metadata DB, `LocalExecutor` or
+`CeleryExecutor`, a real auth manager instead of Simple Auth Manager's all-admins mode, the
+DAGs folder pointed at this repo's `airflow_automation/airflow_dags/`, and the scheduler/dag-processor/API-server
+processes run as proper services rather than tmux sessions).
+
+If the calibration nodes are actually a **pool** of worker machines rather than one host, one
+more thing needs deciding before rollout: Step 2's output is too large for shared storage to
+hold, so Step 2 and Step 3 have to execute on the same machine (Step 2's output staying on that
+machine's local disk), while Step 4 -- needing only Step 3's small output -- can run anywhere.
+The options this requires (both for a plain Airflow-orchestrated worker pool and for Airflow
+submitting to a SLURM/HTCondor-style batch system instead) are analysed in a design write-up
+that isn't tracked in this repo yet. Two background references aren't tracked here either: one on
+resource management and batch systems in general (an introduction to SLURM and HTCondor for
+anyone who hasn't used one, and how Airflow's own resource-management model compares to
+Luigi/REANA/Dagster/Prefect/Kestra), and one summarising the real NGT demonstrator's own target
+hardware, event rates/sizes, buffer-sizing calculations and processing-time benchmarks (external
+CERN/CMS project reports, not this repo's mocked dev environment).
+
+## Package layout
+
+- `NGTLoopStep2/3/4.py` and `ngt_loop_config.py` -- the original FSM loop scripts (see "Every
+  loop" above) and the config/logging helpers they share; `tests/fsm-loops/test_step{2,3,4}.py` cover them.
+- `ngt_calibration_loop/` -- the processing logic (OMS/EOS querying, cmsDriver script
+  preparation, batching decisions), as plain stateless functions with no Airflow dependency.
+  `config.py`/`oms.py`/`eos.py`/`shell.py` are shared helpers; `step2.py`/`step3.py`/`step4.py`
+  hold each step's logic. `shell.run_job_script` is the one seam that actually launches a job
+  script, blocking until it completes -- this is what replaced the old `subprocess.Popen(...)`
+  fire-and-forget calls. `original_fsm_only/` holds the few functions only the original
+  FSM orchestration used (the Step 3/4 run-directory scan, Step 3's witness-file batching
+  decision) -- no Airflow design calls them, they're kept, tested, but out of the step modules
+  the DAGs import.
+- `airflow_automation/airflow_dags/ngt_dags_watch.py` -- the AssetWatcher-driven DAG design:
+  **all assets static, driven by `AssetWatcher`s, zero cron DAGs**. One `Asset("ngt://runs")`
+  watched for new runs, three static `Asset("ngt://files/<cal>")` watched for that run's new
+  files (one event per file); watermarks in each Asset's `AssetStateStore`. Its triggers live in
+  `airflow_automation/airflow_dags/triggers.py`, and its per-step task callables in
+  `airflow_automation/airflow_dags/_process_tasks.py` -- kept DAG-free so they stay
+  independently unit-testable.
+  See [`airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md`](airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md).
+- `calibrationYAML/` -- per-calibration config (unchanged format from the original FSM setup).
+- `tests/` -- see "Running the FSM logic locally / tests" and "Tests of the library and the
+  simulator" above.
+- `airflow_automation/` -- everything specific to the Airflow prototype: `airflow_dags/` (the DAG
+  design above), `airflow-designs-docs/` (its write-up) and `airflow_demo/` (the Airflow
+  adapter for the live-test setup below: `airflow_env.sh`, `airflow_demo.sh`, and the
+  `*_interactive_demo.sh` walkthroughs). `airflow_dags/` is still imported as the top-level
+  package `airflow_dags` -- `airflow_env.sh` and `tests/conftest.py` put `airflow_automation/`
+  on the path for that.
+- `scenario-player/` -- the engine-agnostic offline simulator, see "The offline simulator" above:
+  `sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and
+  `scenario_player.py` (driving/replaying fake runs, with `scenarios/*.yaml`), `faults.py` (the
+  shared fault-injection vocabulary) and `bin/` (the fake `cmsRun`/`cmsDriver.py`/... toolchain).
+  Nothing in it imports or knows about Airflow specifically, so the same scratch environment and
+  scenario files drive both the FSM loops (`live_demo.sh`) and Airflow unchanged -- see `sim_env.sh`'s header
+  comment for why that split exists. It's not a Python package (hence the hyphen): `faults.py`,
+  `seed.py` and `scenario_player.py` are top-level modules found via `sys.path`
+  (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh` for the fake `omsapi`'s live fault path).
+
+### Directory structure produced by a run
+
+```
+$DATA_BASE_PATH/{calibration}/
+└── run{run_number}/
+    ├── runStart.log            # Step 2: ISO timestamp
+    ├── runEnd.log              # Step 2: signals completion
+    │
+    ├── cmsDriver_<hash>.sh     # Step 2: job script (self-deletes on success)
+    ├── run*_LS*_step2.py       # Step 2: CMSSW Python configs
+    ├── run*_LS*_step2.log      # Step 2: job logs
+    ├── run*_LS*_step2.root     # Step 2: RECO output files
+    ├── run*_LS*_step2_job.txt  # Step 2: witness files
+    │
+    ├── allLSProcessed.log              # Step 2: incrementally-updated processed-LS log
+    ├── expectedOutputs.log             # Step 2: expected Step 2 outputs
+    ├── allStep2FilesProcessed.log      # Step 3: incrementally-updated processed-files log
+    ├── allStep3FilesProcessed.log      # Step 4: rewritten each cycle with the full harvested set
+    │
+    ├── alcaPromptJob_<hash>/           # Step 3: one ALCA job per distinct input-file batch
+    │   ├── ALCAOUTPUT.sh
+    │   ├── run*_step3.py
+    │   ├── stdout.log / stderr.log
+    │   ├── PromptCalibProd*.root
+    │   └── *_job.txt                   # witness file
+    │
+    └── harvestJob_<hash>/              # Step 4: one harvest job per distinct input-file set
+        ├── HARVESTING.sh               # cmsRun ALCAHARVEST only
+        ├── UPLOAD.sh                   # uploadConditions.py -- separate, independently retried
+        ├── run*_step4.py
+        ├── stdout.log / stderr.log
+        ├── upload_stdout.log / upload_stderr.log
+        ├── {metadata_filename}.txt
+        └── {final_db_name}.db
+```
+
+(`alcaPromptJob_<hash>`/`harvestJob_<hash>` replace the old FSM's sequentially-numbered
+`alcaPromptJob000`/`harvestJob000` -- see "Why Airflow" above for why.)
+
+## Running a live demo with Airflow
+
+`airflow_automation/airflow_demo/airflow_demo.sh` runs the real Airflow scheduler + dag-processor + API server (in tmux)
+against the same fake OMS/EOS/CMSSW toolchain in `scenario-player/bin/` (fake `cmsDriver.py`, `cmsRun`,
+`edmFileUtil`, `xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`) and `scenario-player/seed.py` used by the
+tests -- bootstrapped via `scenario-player/sim_env.sh`'s `sim_setup`, shared with
+`scenario-player/live_demo.sh` (the FSM loops' adapter) and any future engine adapter. Everything runs for real -- real DAG runs, real generated job scripts, real
+output files flowing Step 2 -> Step 3 -> Step 4 to a fake condDB upload -- entirely offline.
+Airflow has no official Windows support, so this needs a Linux host (WSL works fine on
+Windows).
+
+```bash
+./airflow_automation/airflow_demo/airflow_demo.sh setup                                # create ./demo-env scratch env
+./airflow_automation/airflow_demo/airflow_demo.sh start                                 # scheduler + dag-processor + API server (:8090), tmux
+./airflow_automation/airflow_demo/airflow_demo.sh unpause-watch                          # unpause the 4 DAGs (starts the watchers)
+./airflow_automation/airflow_demo/airflow_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
+./airflow_automation/airflow_demo/airflow_demo.sh ui                                    # print the UI URL
+./airflow_automation/airflow_demo/airflow_demo.sh add-ls EcalPedestals 398600 53         # simulate a new lumisection arriving
+./airflow_automation/airflow_demo/airflow_demo.sh end-run 398600                         # simulate the run ending
+./airflow_automation/airflow_demo/airflow_demo.sh status                                 # list running tmux sessions
+./airflow_automation/airflow_demo/airflow_demo.sh stop                                   # tear down all three processes
+```
+
+For a guided, narrated walkthrough that pauses between steps and shows you the relevant output
+directories/files, Assets and DAG-run history so you can watch the run watcher -> run primer ->
+file watcher -> process chain actually happening (plus a demonstration of a forced job
+failure retrying), use:
+
+```bash
+./airflow_automation/airflow_demo/watch_interactive_demo.sh                                      # EcalPedestals, 2 LS
+./airflow_automation/airflow_demo/watch_interactive_demo.sh --calibration SiStripBad --ls 4
+./airflow_automation/airflow_demo/watch_interactive_demo.sh --yes                                # don't pause between steps
+```
+
+### Playing a scenario against Airflow
+
+`seed-run`/`add-ls`/`end-run` above are one-shot commands, handy for typing out by hand or
+for the paced walkthrough above. `scenario-player/scenario_player.py` (see "Scripting a timed
+sequence of runs/lumisections" above) plays a whole scenario file instead:
+
+```bash
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+```
+
+This is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run` are (it calls
+`scenario-player/seed.py`'s functions directly, not Airflow) -- run it against `$NGT_DEV_HOME` while
+`./airflow_automation/airflow_demo/airflow_demo.sh start` is running to exercise the current Airflow-based pipeline --
+the same scenario files play unchanged against the FSM loops via `./scenario-player/live_demo.sh play`.
+
+Run `./airflow_automation/airflow_demo/airflow_demo.sh` with no arguments for the full command list. All demo *data* lives
+under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside this repo) --
+delete it any time to reset the demo environment (the Airflow instance itself -- metadata DB,
+`AIRFLOW_HOME` -- is separate/persistent, see "Setting up and running Airflow" above).
+
+### Resetting state
+
+Two independent layers of state can go stale, and clearing one doesn't clear the other:
+
+- **The simulator's own state** (`$NGT_DEV_HOME`: fake OMS runs, EOS files, output data, logs)
+  -- see "Resetting the simulator's state and the give-up timers" above. `airflow_demo.sh setup`
+  (which calls the same `sim_setup` internally) always activates `~/airflow3-ngt-venv` itself
+  first. **Caution**: `./scenario-player/sim_env.sh reset` while Airflow is running is not safe
+  -- confirmed live, doing this while Airflow's triggerer had in-flight watcher triggers
+  (`ngt_dags_watch.py`'s `AssetWatcher`s) left them stuck polling stale state indefinitely
+  (needing a process restart to recover), and silently orphaned each tmux process's own console
+  log. If Airflow is running, use `./airflow_automation/airflow_demo/airflow_demo.sh reset-scenario`
+  instead (below).
+
+- **Airflow's own state** (DAG-run/task-instance history, in the metadata DB, *not* under
+  `$NGT_DEV_HOME`) -- resetting only the simulator leaves stale DagRuns in Airflow's UI
+  referencing run numbers no longer on disk, so `airflow_automation/airflow_demo/airflow_demo.sh` has its own commands:
+  ```bash
+  ./airflow_automation/airflow_demo/airflow_demo.sh reset-watch      # clear ngt_dags_watch.py's 4 DAGs + its static Assets
+  ./airflow_automation/airflow_demo/airflow_demo.sh reset-airflow    # full reset: all DAG-run history, variables, connections --
+                                          # everything. Stops/restarts the 4 tmux processes
+                                          # around it automatically if they were running (each
+                                          # one crashes on its own next DB query otherwise --
+                                          # they hold in-memory state tied to the old schema)
+  ./airflow_automation/airflow_demo/airflow_demo.sh reset-scenario   # wipes + recreates $NGT_DEV_HOME (scenario-player/sim_env.sh's own
+                                          # reset+setup), stopping/restarting Airflow around it if
+                                          # running -- the safe way to reset simulator state
+                                          # without hitting the caution above. Doesn't touch
+                                          # DAG-run history; pair with the others for that.
+  ```
+  `reset-watch`/`reset-airflow` don't touch `$NGT_DEV_HOME`; `reset-scenario`
+  doesn't touch DAG-run history -- reset the ones you need for a fully clean slate between test
+  runs.
+
+The Airflow adapter adds one more setting, on top of the simulator's own (`NGT_DEV_HOME`,
+`NGT_TEST_MAX_LATCH_TIME_HOURS`, `NGT_TEST_STEP_TIMEOUT_SECONDS` -- see above):
+
+| Variable                          | Default                          | Meaning                          |
+|-------------------------------------|-----------------------------------|-----------------------------------|
+| `NGT_RUN_END_GRACE_SECONDS` | `20` (production default: `1800`) | how long a file watcher keeps waiting after a run *ends* before giving up -- see below |
+
+e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./airflow_automation/airflow_demo/airflow_demo.sh setup`. `NGT_RUN_END_GRACE_SECONDS` is read once per DAG
+parse (it's a module-level default in `_process_tasks.py`, not a calibrationYAML key), so
+the dag-processor needs to re-parse after changing it.
+
+**Why `NGT_RUN_END_GRACE_SECONDS` exists**: the simulator's two give-up timers are
+measured from a run's *start*; a run that runs only part of that budget before *ending* would
+otherwise still leave the file watcher polling for whatever's left
+of it -- confirmed live. Rather than changing `ngt_calibration_loop`'s shared decision logic
+(`step2.py`, whose decision logic stays unmodified), this one lives
+entirely in `airflow_automation/airflow_dags/triggers.py`'s `LumisectionFileWatcherTrigger`: it
+queries OMS directly for the run's
+actual end time and gives up once that's `NGT_RUN_END_GRACE_SECONDS` in the past,
+independent of `check_ls_for_processing`'s own (unmodified) run-start-relative timeout. See
+`watch_asset_scheduling_design.md` for the full writeup.
+
+## Airflow DAG design
+
+The DAG set is built from the same, completely unmodified `ngt_calibration_loop` processing
+logic and the same fake OMS/EOS/CMSSW live-test setup the pytest suite uses, so it can be
+exercised end to end against the scripted scenarios in `scenario-player/scenarios/*.yaml`
+(played by `scenario-player/scenario_player.py`). Full writeup:
+[`watch_asset_scheduling_design.md`](airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md)
+-- DAG-by-DAG, sequence diagrams, batching semantics, an introduction to the Airflow 3 Asset
+machinery it is built on, and why per-run assets are not an option.
+
+**`airflow_automation/airflow_dags/ngt_dags_watch.py`**: 4 DAGs, **zero cron** -- every asset
+static, driven by `AssetWatcher`s.
+
+- `Asset("ngt://runs")` with a `RunWatcherTrigger` -- an event-driven `BaseEventTrigger` that
+  runs continuously in the `triggerer` (while `ngt_watch_run_primer` is unpaused), polls OMS
+  calibration-agnostically, and yields one event per new run.
+- `ngt_watch_run_primer` (`schedule=[Asset("ngt://runs")]`) -- calls `step2.find_new_run` per
+  calibration to create the working dirs the file watchers gate on. (An `AssetWatcher` can't be
+  *spawned* by an event; the file watchers are always running, just idle until a run dir exists.)
+- `Asset("ngt://files/<cal>")` x3 with a `LumisectionFileWatcherTrigger` -- watches that
+  calibration's active run dir and yields **one event per file** (reusing
+  `step2.check_ls_for_processing` unchanged as the "is there something yet" check); writes
+  `runEnd.log` on run-end. Dedup watermarks (seen runs / emitted files) live in each Asset's
+  `AssetStateStore`.
+- `ngt_watch_process_<cal>` (`schedule=[Asset("ngt://files/<cal>")]`) x3 -- one DAG **per
+  calibration**, so each calibration's runs/logs/Grid view are separately browsable and pausable
+  in the Airflow UI. Runs the one file from the triggering Asset event through
+  `step2_express >> step3_alca >> step4_harvest >> step4_upload`. Step 2 and Step 3 each act on
+  only that one file; Step 4 is the deliberate exception -- it harvests/uploads from *every*
+  ALCARECO file accumulated for the run so far, every time (this is `step4.py`'s own pre-existing
+  "reprocess everything" behavior, reused unchanged -- more statistics genuinely improve the
+  payload). The execution flow is still one DagRun per file; Step 4 just looks at more than its
+  own triggering file's data.
+
+This needs Airflow's `triggerer` process running, since it hosts all four watchers
+(`airflow_automation/airflow_demo/airflow_demo.sh start` launches it alongside the scheduler,
+dag-processor and API server). Pausing the `ngt_watch_*` DAGs stops the watchers.
+
+The trade-off, stated plainly: a watcher only runs while its consuming DAG is unpaused, and the
+triggerer restarting a watcher after each yield is also a window in which it could re-yield a
+file -- which is why the `emitted_run<N>` watermark is persisted *before* the yield and
+`step2_express` additionally skips a file already in `allLSProcessed.log`. A calibration whose
+files never arrive for an OMS-visible run (e.g. only SiStripBad gets seeded for a given run
+number in a test scenario) keeps its file watcher polling until the run-end grace period (or, if
+the run never ends, `step2.py`'s own give-up timer) expires -- inherited from
+`oms.find_new_run`/`check_ls_for_processing` unchanged.
+
+Quick start (assumes `airflow_automation/airflow_demo/airflow_demo.sh setup` and `start` have
+already been run):
+
+```bash
+./airflow_automation/airflow_demo/airflow_demo.sh unpause-watch            # also starts the 4 AssetWatchers in the triggerer
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+# watch Asset ngt://runs -> ngt_watch_run_primer -> Asset ngt://files/ecalpedestals
+#       -> ngt_watch_process_ecalpedestals   (all 4 assets show in the UI Assets view)
+./airflow_automation/airflow_demo/airflow_demo.sh pause-watch              # stops the watchers
+```
+
+For a paced, narrated walkthrough instead (including a forced-failure/retry demonstration), use
+`./airflow_automation/airflow_demo/watch_interactive_demo.sh`.
+
+`tests/airflow-ngt/test_dags_watch.py` covers the design (see "Tests of the library and the simulator" above).
 
 ## Public Presentations
 
