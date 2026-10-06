@@ -16,6 +16,9 @@ with step3.py:
   anything *new* worth triggering another harvest cycle over (`waiting`
   below), so the processed-log is overwritten with the full current set each
   cycle rather than appended to.
+
+The FSM's run-directory scan (`find_new_run`) is only needed by the original FSM
+and lives in original_fsm_only/step4.py.
 """
 
 import hashlib
@@ -71,22 +74,6 @@ class JobSpec:
 def _path_where_files_appear(ngt_params, calibration_name):
     data_base_path = ngt_params.get("DATA_BASE_PATH", "/data/ngt")
     return os.path.join(data_base_path, calibration_name) + "/"
-
-
-def find_new_run(calibration_name, already_latched_run_numbers):
-    """Same run-directory-scan/dedup pattern as step3.find_new_run."""
-    ngt_params = config.load_ngt_parameters()
-    path = Path(_path_where_files_appear(ngt_params, calibration_name))
-    if not path.exists():
-        return None
-
-    current_dirs = {p.name for p in path.iterdir() if p.is_dir()}
-    already = {f"run{n}" for n in already_latched_run_numbers}
-    new_runs = {p for p in (current_dirs - already) if p.startswith("run")}
-    if not new_runs:
-        return None
-
-    return sorted(new_runs)[0][3:]
 
 
 def build_run_context(calibration_name, run_number):
