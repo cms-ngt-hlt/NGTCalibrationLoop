@@ -1,11 +1,14 @@
 """
-(FAKE) provenance manifests: what the fake toolchain writes into its outputs. Standard library
-only -- the fakes in bin/ import it from the directory above, like faults.py.
+(FAKE) provenance manifests and the dummy conditions DB: the two formats the fake toolchain writes.
+Standard library only -- the fakes in bin/ import it from the directory above, like faults.py.
 
 A provenance manifest is what a fake cmsRun output contains: a magic first line, then one JSON
 object naming the calibration/run/lumisections that went into it -- the union of its inputs'
 manifests or, for a raw file seed.py wrote, the LS in its run<RUN>_ls<LS> name. So identifiers
 travel the real data path, step2 -> step3 -> step4.
+
+The ledger, $NGT_DEV_HOME/conddb/payloads.jsonl, gets one JSON line per successful fake upload,
+numbered under a lock; a scenario's expect: block is checked against it.
 """
 import json
 import os
@@ -13,9 +16,18 @@ import re
 import tempfile
 from datetime import datetime, timezone
 
+import faults  # scenario-player/faults.py: on sys.path wherever this module is imported
+
 PROVENANCE_MAGIC = "(FAKE-NGT-PROVENANCE-v1)"
 # How seed.py names the raw files (bin/edmFileUtil parses the same): run<RUN>_ls<LS>....root.
 RAW_LS_RE = re.compile(r"run(\d+)_ls(\d+)")
+CONDDB_DIR_NAME = "conddb"
+LEDGER_NAME = "payloads.jsonl"
+# The ledger's home when NGT_DEV_HOME isn't exported, seed.py's default too: the player seeds runs
+# through seed.py and reads the ledger through here.
+DEFAULT_DEV_HOME = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "demo-env"
+)
 
 
 def utc_now():
@@ -80,3 +92,41 @@ def lumisections_of_input(path):
 def merge_input_lumisections(paths):
     """Union of every input's lumisections -- what a step's output covers."""
     return set().union(*(lumisections_of_input(path) for path in paths))
+
+
+def conddb_dir():
+    return os.environ.get("NGT_CONDDB_DIR") or os.path.join(
+        os.environ.get("NGT_DEV_HOME") or DEFAULT_DEV_HOME, CONDDB_DIR_NAME
+    )
+
+
+def ledger_path():
+    return os.path.join(conddb_dir(), LEDGER_NAME)
+
+
+def read_ledger(path=None):
+    """Every upload row, oldest first. A torn last line (a writer killed mid-append) is skipped:
+    the ledger is read while uploads may still be landing."""
+    path = path or ledger_path()
+    if not os.path.exists(path):
+        return []
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return sorted(rows, key=lambda row: row.get("seq") or 0)
+
+
+def append_payload(record, path=None):
+    """Append one upload row, numbered (`seq`) under the lock, so seq is the order of all
+    uploads even with several calibrations uploading at once. Returns the row."""
+    path = path or ledger_path()
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with faults.locked_json_file(path):
+        row = {"seq": len(read_ledger(path)) + 1, "uploaded_at": utc_now(), **record}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        return row

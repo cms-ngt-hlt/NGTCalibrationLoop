@@ -1,12 +1,13 @@
 """
-Provenance through the fake toolchain: scenario-player/bin/{cmsDriver.py,cmsRun} run
-as real subprocesses -- the contract under test is theirs: the FAKE_INPUTS/FAKE_OUTPUTS markers
+Provenance through the fake toolchain: scenario-player/bin/{cmsDriver.py,cmsRun,uploadConditions.py}
+run as real subprocesses -- the contract under test is theirs: the FAKE_INPUTS/FAKE_OUTPUTS markers
 and the scope read off the cwd -- in the directories NGTLoopStep2/3/4.py use:
 
     <data>/<calibration>/run<N>/                     step2 (raw EOS -> .root)
     <data>/<calibration>/run<N>/alcaPromptJob<NNN>/  step3 (-> ALCARECO .root)
-    <data>/<calibration>/run<N>/harvestJob<NNN>/     step4 (-> .db)
+    <data>/<calibration>/run<N>/harvestJob<NNN>/     step4 (-> .db, then upload)
 """
+import json
 import os
 import subprocess
 import sys
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="the fakes run via th
 def chain(tmp_path, monkeypatch):
     """A $NGT_DEV_HOME with one run's step2 working dir."""
     monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
+    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
     monkeypatch.delenv("NGT_FAULTS_DIR", raising=False)
     run_dir = tmp_path / "data" / "EcalPedestals" / "run398600"
     run_dir.mkdir(parents=True)
@@ -60,7 +62,7 @@ def _seed_raw(run_dir, run, lumisections):
 
 
 def _full_chain(run_dir, lumisections, run=398600):
-    """step2 -> step3 -> step4. Returns the harvest job dir."""
+    """step2 -> step3 -> step4 -> upload. Returns the harvest job dir."""
     step2_out = f"run{run}_LS{min(lumisections):04d}To{max(lumisections):04d}_ecalPedsStep2.root"
     raw = _seed_raw(run_dir, run, lumisections)
     _cms_job(run_dir, step_arg="RAW2DIGI,RECO", inputs=raw, python_filename="s2.py", fileout="tmp.root")
@@ -84,6 +86,7 @@ def _full_chain(run_dir, lumisections, run=398600):
         python_filename="s4.py",
     )
     (harvest_dir / "promptCalibConditions.db").rename(harvest_dir / "NGTCalibEcalPedestals.db")
+    _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest_dir)
     return harvest_dir
 
 
@@ -162,3 +165,61 @@ def test_a_harvest_fed_the_wrong_inputs_produces_a_wrong_payload(chain):
     """Provenance comes from the inputs actually passed: a harvest missing one is visibly short."""
     assert _harvest_of_two_step3_outputs(chain, ["alcaPromptJob000"])["lumisections"] == [51, 52]
 
+
+# --- the upload ------------------------------------------------------------------
+
+
+def test_upload_appends_one_row_per_successful_upload(chain):
+    harvest = _full_chain(chain, [51])
+    _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest)
+
+    rows = fake_conddb.read_ledger()
+    assert [row["seq"] for row in rows] == [1, 2]
+    assert {(row["calibration"], row["run"], tuple(row["lumisections"]), row["db_file"]) for row in rows} == {
+        ("EcalPedestals", 398600, (51,), "NGTCalibEcalPedestals.db")
+    }
+
+
+def test_upload_does_not_read_the_metadata_txt_step4_writes(chain):
+    """The ledger records what the pipeline processed: a metadata file naming another run stays out."""
+    harvest = _full_chain(chain, [51, 52])
+    (harvest / "NGTCalibEcalPedestals.txt").write_text(
+        json.dumps({"since": 999999, "destinationTags": {"SomeOtherTag": {}}}), encoding="utf-8"
+    )
+
+    _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest)
+
+    latest = fake_conddb.read_ledger()[-1]
+    assert latest["run"] == 398600
+    assert "since" not in latest and "tag" not in latest
+
+
+@pytest.mark.parametrize("content, reason", [(b"not one of ours\n", "no provenance manifest"), (None, "no such file")])
+def test_upload_records_nothing_for_a_db_it_cannot_read(chain, content, reason):
+    """Not even an empty payload: HARVESTING.sh uploads after a failed cmsRun too, with no .db."""
+    harvest = chain / "harvestJob000"
+    harvest.mkdir()
+    if content is not None:
+        (harvest / "NGTCalibEcalPedestals.db").write_bytes(content)
+
+    result = _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest, ok=False)
+
+    assert reason in result.stderr
+    assert fake_conddb.read_ledger() == []
+
+
+def test_upload_writes_no_row_when_a_fault_is_armed(chain, tmp_path, monkeypatch):
+    """"Nothing should reach the conditions DB" is only assertable if a failed upload writes no row."""
+    harvest = _full_chain(chain, [51])
+    faults_dir = tmp_path / "faults"
+    faults_dir.mkdir()
+    (faults_dir / "upload_conditions.json").write_text(
+        json.dumps([{"mode": "exit_code", "exit_code": 1, "calibration": "EcalPedestals", "times_remaining": 1}]),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NGT_FAULTS_DIR", str(faults_dir))
+
+    result = _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest, ok=False)
+
+    assert result.returncode == 1 and "(FAKE) injected upload_conditions fault" in result.stderr
+    assert len(fake_conddb.read_ledger()) == 1  # only _full_chain's own upload
