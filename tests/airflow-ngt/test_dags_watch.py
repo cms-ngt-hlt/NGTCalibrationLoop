@@ -401,6 +401,64 @@ def test_watch_process_step2_skips_an_already_processed_file(isolated_env, fake_
     assert len(job_runner) == 0
 
 
+def _make_alca_output(working_dir, name):
+    """One finished Step 3 job dir, as _step4_harvest's file scan sees it."""
+    job_dir = working_dir / name
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "ecalPedsStep3_job.txt").touch()
+    (job_dir / "PromptCalibProdEcalPedestals.root").write_bytes(b"(FAKE) ALCARECO output\n")
+    return job_dir / "PromptCalibProdEcalPedestals.root"
+
+
+def test_step4_upload_uploads_the_job_the_harvest_produced_not_a_recomputed_one(
+    isolated_env, job_runner
+):
+    """Found live. The job dir is a hash of the harvest's input set, and that
+    set grows as Step 3 keeps producing ALCARECO files. _step4_upload used to
+    recompute it, so when a new file landed between the two tasks it resolved
+    to a *different* directory -- one whose harvest had not run, leaving
+    uploadConditions.py with no payload to read (it recorded one covering no
+    lumisections), or worse one holding another harvest's payload. The upload
+    must take the harvested set from XCom instead.
+    """
+    ctx2 = _seed_run("EcalPedestals", 398601)
+    _make_alca_output(ctx2.working_dir, "alcaPromptJob_aaaaaaaaaa")
+    context = {
+        "ti": _FakeTI(),
+        "triggering_asset_events": make_triggering({"run_number": "398601", "file": "irrelevant"}),
+    }
+
+    pp.make_step4_harvest_callable("EcalPedestals")(**context)
+    harvest_dir = job_runner[-1]["cwd"]
+    assert job_runner[-1]["script_name"] == "HARVESTING.sh"
+
+    # Step 3 delivers another ALCARECO file before the upload task runs, which
+    # is what used to move the upload onto a different job directory.
+    _make_alca_output(ctx2.working_dir, "alcaPromptJob_bbbbbbbbbb")
+
+    pp.make_step4_upload_callable("EcalPedestals")(**context)
+
+    assert job_runner[-1]["script_name"] == "UPLOAD.sh"
+    assert job_runner[-1]["cwd"] == harvest_dir, (
+        "the upload ran in a different job directory than the harvest that produced its payload"
+    )
+
+
+def test_step4_upload_skips_when_the_harvest_pushed_nothing(isolated_env, job_runner):
+    """No harvested set in XCom means no payload exists to upload -- skip
+    rather than fall back to recomputing one, which is the bug above."""
+    ctx2 = _seed_run("EcalPedestals", 398601)
+    _make_alca_output(ctx2.working_dir, "alcaPromptJob_cccccccccc")
+    context = {
+        "ti": _FakeTI(),
+        "triggering_asset_events": make_triggering({"run_number": "398601", "file": "irrelevant"}),
+    }
+
+    with pytest.raises(AirflowSkipException):
+        pp.make_step4_upload_callable("EcalPedestals")(**context)
+    assert len(job_runner) == 0
+
+
 def test_step4_harvest_skips_when_nothing_new(isolated_env):
     run_dir = isolated_env.data_dir / "EcalPedestals" / "run398601"
     run_dir.mkdir(parents=True)

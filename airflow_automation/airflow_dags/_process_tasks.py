@@ -156,6 +156,12 @@ def make_step4_harvest_callable(calibration):
             raise AirflowSkipException("Nothing to harvest (input files vanished)")
 
         step4.run_harvesting_job(job_spec)
+        # Hand step4_upload the exact input set this harvest used, so it
+        # uploads *this* payload rather than re-deriving a possibly different
+        # one -- see _step4_upload for why that matters.
+        context["ti"].xcom_push(
+            key="harvested_files", value=sorted(str(p) for p in job_spec.input_files)
+        )
         logging.info(
             f"[{calibration} run {run_number}] Step 4 harvested {len(decision.files_to_process)} accumulated file(s)"
         )
@@ -165,22 +171,36 @@ def make_step4_harvest_callable(calibration):
 
 def make_step4_upload_callable(calibration):
     def _step4_upload(**context):
-        # Re-derives the same job (idempotent/deterministic naming, like
-        # _step4_harvest) instead of passing the JobSpec through XCom -- cheap
-        # and idempotent thanks to the content-hashed job-dir naming.
         run_number, _file = run_and_file_from_context(context)
 
-        ctx4 = step4.build_run_context(calibration, str(run_number))
-        decision = step4.check_files_for_processing(ctx4)
-        if decision.action == "wait":
-            raise AirflowSkipException("Nothing new for Step 4 to upload")
+        # Take the harvested input set from step4_harvest rather than
+        # recomputing it. This task used to call check_files_for_processing()
+        # itself, on the theory that the content-hashed job-dir naming made
+        # that idempotent. It doesn't: the naming is deterministic given the
+        # same input set, but the set *grows* between the two tasks as Step 3
+        # keeps producing ALCARECO files. So the upload could hash a different
+        # set than its own harvest did and resolve to a different job
+        # directory -- one whose harvest had not run (no payload to upload at
+        # all) or, worse, one holding a different harvest's payload, which it
+        # would then upload and write the processed-log for.
+        #
+        # Found live: uploadConditions.py failed to find NGTCalibEcalPedestals.db
+        # in a harvestJob_* directory whose harvest ran only moments later,
+        # and the run recorded a payload covering no lumisections at all.
+        harvested = context["ti"].xcom_pull(task_ids="step4_harvest", key="harvested_files")
+        if not harvested:
+            raise AirflowSkipException("Nothing harvested for Step 4 to upload")
 
-        job_spec = step4.prepare_harvesting_job(ctx4, decision.files_to_process)
+        ctx4 = step4.build_run_context(calibration, str(run_number))
+        job_spec = step4.prepare_harvesting_job(ctx4, {Path(p) for p in harvested})
         if job_spec is None:
-            raise AirflowSkipException("Nothing to upload (input files vanished)")
+            raise AirflowSkipException("Nothing to upload (harvested files vanished)")
 
         step4.upload_conditions(job_spec)
-        step4.finalize_cycle(ctx4, job_spec, decision)
+        # The decision is consulted only for finalize_cycle's is-final flag;
+        # the processed-log it writes comes from job_spec.input_files, i.e.
+        # what was actually harvested and uploaded above.
+        step4.finalize_cycle(ctx4, job_spec, step4.check_files_for_processing(ctx4))
         logging.info(f"[{calibration} run {run_number}] Step 4 uploaded conditions")
 
     return _step4_upload
