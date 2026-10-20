@@ -21,8 +21,8 @@
 # For a guided, pause-and-confirm walkthrough instead of firing everything at
 # once, use watch_interactive_demo.sh (ngt_dags_watch.py -- see
 # watch_asset_scheduling_design.md). For an unattended, timed sequence of runs/
-# lumisections (e.g. for a scripted test run against whatever engine/design
-# is currently `start`ed/unpaused), use scenario-player/scenario_player.py -- see
+# lumisections (e.g. for a scripted test run), use `play`, which brings this
+# instance up and then hands a scenario file to scenario-player/scenario_player.py -- see
 # scenario-player/scenarios/.
 #
 # Quick start:
@@ -35,6 +35,8 @@
 #   ./airflow_automation/airflow_demo/airflow_demo.sh end-run 398600
 #   ./airflow_automation/airflow_demo/airflow_demo.sh status
 #   ./airflow_automation/airflow_demo/airflow_demo.sh stop
+# or, for a whole scenario file, from a cold start:
+#   ./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
 #
 # $NGT_DEV_HOME (default ./demo-env, a gitignored directory inside this repo)
 # holds the fake data/EOS/CMSSW scratch state, same default as scenario-player/seed.py
@@ -52,6 +54,7 @@ set -euo pipefail
 # shellcheck disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/airflow_env.sh"
 CALIBRATIONS=(SiStripBad EcalPedestals BeamSpot)
+PLAYER="$REPO_DIR/scenario-player/scenario_player.py"
 
 # tmux session names, per checkout (see airflow_env.sh's NGT_AIRFLOW_TMUX_PREFIX).
 SESSION_SCHEDULER="${NGT_AIRFLOW_TMUX_PREFIX}Scheduler"
@@ -104,6 +107,15 @@ identical to any other engine adapter -- delegates straight to scenario-player/s
   add-ls <calibration> <run> <ls>
   end-run <run>
   list-runs
+  play <scenario.yaml> [options]          Play a whole timeline from a scenario file instead.
+                                          Sets up \$NGT_DEV_HOME (and this checkout's database)
+                                          if it isn't there, starts whichever of the four
+                                          processes aren't running, unpauses the watch DAGs and
+                                          waits for the triggerer to run their watchers, then
+                                          passes every argument straight to scenario_player.py
+                                          (--interactive, --monitor, --speed, --dry-run -- run it
+                                          with --help). Replaying a scenario needs reset-scenario
+                                          first: the watchers ignore a run number they've seen.
 
 Injecting failures (writes \$NGT_DEV_HOME/faults/<target>.json, polled by
 tests/stubs/omsapi / scenario-player/bin/cmsRun / scenario-player/bin/uploadConditions.py -- see
@@ -429,6 +441,93 @@ cmd_reset_airflow() {
   fi
 }
 
+_wait_for_watch_design() {
+  # Blocks until ngt_dags_watch.py's 4 DAGs are parsed ($1 = dags: unpausing a DAG the
+  # dag-processor hasn't seen yet fails) or until they're also unpaused and the newest live
+  # triggerer is running all 4 watchers ($1 = live: a scenario's run seeded before then could end
+  # before the run watcher ever sees it). Reads the metadata DB directly, as the _reset_* helpers
+  # do; the pause state from there rather than from `airflow dags unpause`'s own output, which
+  # isn't reliable evidence. Expects activate_venv to have run.
+  WAIT_FOR="$1" python3 - <<'PY'
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+from airflow.jobs.job import Job
+from airflow.models import DagModel
+from airflow.models.trigger import Trigger
+from airflow.utils.session import create_session
+
+dag_ids = {"ngt_watch_run_primer"} | {f"ngt_watch_process_{c}" for c in ("sistripbad", "ecalpedestals", "beamspot")}
+watchers = ("airflow_dags.triggers.RunWatcherTrigger", "airflow_dags.triggers.LumisectionFileWatcherTrigger")
+want_live = os.environ["WAIT_FOR"] == "live"
+deadline = time.monotonic() + 180
+while True:
+    with create_session() as session:
+        paused = {d.dag_id: d.is_paused for d in session.query(DagModel).filter(DagModel.dag_id.in_(dag_ids))}
+        ready = set(paused) == dag_ids
+        if ready and want_live:
+            triggerer = (
+                session.query(Job)
+                .filter(Job.job_type == "TriggererJob", Job.state == "running")
+                .order_by(Job.id.desc())
+                .first()
+            )
+            alive = triggerer is not None and triggerer.latest_heartbeat > datetime.now(timezone.utc) - timedelta(seconds=30)
+            running = alive and session.query(Trigger).filter(
+                Trigger.classpath.in_(watchers), Trigger.triggerer_id == triggerer.id
+            ).count()
+            ready = not any(paused.values()) and running >= len(dag_ids)
+    if ready:
+        sys.exit(0)
+    if time.monotonic() > deadline:
+        sys.exit(
+            "ngt_dags_watch.py's DAGs never got parsed -- see `airflow_demo.sh logs dag-processor`"
+            if not want_live
+            else "the watch DAGs' watchers aren't running -- see `airflow_demo.sh logs triggerer`"
+        )
+    time.sleep(2)
+PY
+}
+
+cmd_play() {
+  # scenario-player/live_demo.sh's `play`, for Airflow: everything a scenario needs from a cold
+  # start, then the scenario itself. Every argument goes to scenario_player.py untouched, and
+  # the ones that play nothing skip the bring-up.
+  local arg session
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help|--dry-run|--only-list-calibrations)
+        activate_venv
+        exec python3 "$PLAYER" "$@"
+        ;;
+    esac
+  done
+  activate_venv
+  if [ ! -f "$NGT_DEV_HOME/env.sh" ]; then
+    echo "(no scratch environment at $NGT_DEV_HOME yet -- setting one up first)"
+    cmd_setup
+    echo
+  fi
+  # A malformed scenario fails here, before any of Airflow is touched.
+  python3 "$PLAYER" "$@" --only-list-calibrations > /dev/null
+  for session in "$SESSION_SCHEDULER" "$SESSION_DAG_PROCESSOR" "$SESSION_API_SERVER" "$SESSION_TRIGGERER"; do
+    if ! tmux has-session -t "$session" 2>/dev/null; then
+      cmd_start
+      echo
+      break
+    fi
+  done
+  echo "Waiting for the dag-processor to parse ngt_dags_watch.py..."
+  _wait_for_watch_design dags
+  cmd_pause_unpause_watch unpause > /dev/null
+  echo "Waiting for the triggerer to run the 4 watchers..."
+  _wait_for_watch_design live
+  echo
+  python3 "$PLAYER" "$@"
+}
+
 cmd_reset_scenario() {
   # Wraps scenario-player/sim_env.sh's own sim_reset/sim_setup (wipes and recreates
   # $NGT_DEV_HOME -- every fake OMS run/EOS file/output/log) around a
@@ -494,6 +593,12 @@ case "${1:-}" in
   list-runs)
     activate_venv
     python3 "$REPO_DIR/scenario-player/seed.py" list-runs
+    ;;
+  play)
+    # As in live_demo.sh: everything after `play` goes to scenario_player.py untouched, and the
+    # scenario path is resolved relative to your CWD, exactly as if you'd run the player directly.
+    shift
+    cmd_play "$@"
     ;;
   arm-fault)
     shift

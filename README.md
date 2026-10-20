@@ -780,7 +780,14 @@ Windows).
 ./airflow_automation/airflow_demo/airflow_demo.sh add-ls EcalPedestals 398600 53         # simulate a new lumisection arriving
 ./airflow_automation/airflow_demo/airflow_demo.sh end-run 398600                         # simulate the run ending
 ./airflow_automation/airflow_demo/airflow_demo.sh status                                 # list running tmux sessions
-./airflow_automation/airflow_demo/airflow_demo.sh stop                                   # tear down all three processes
+./airflow_automation/airflow_demo/airflow_demo.sh stop                                   # tear down all four processes
+```
+
+Or let one command do all of that from a cold start, for a whole scenario file (see "Playing a
+scenario against Airflow" below):
+
+```bash
+./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor
 ```
 
 For a guided, narrated walkthrough that pauses between steps and shows you the relevant output
@@ -797,17 +804,27 @@ failure retrying), use:
 ### Playing a scenario against Airflow
 
 `seed-run`/`add-ls`/`end-run` above are one-shot commands, handy for typing out by hand or
-for the paced walkthrough above. `scenario-player/scenario_player.py` (see "Scripting a timed
-sequence of runs/lumisections" above) plays a whole scenario file instead:
+for the paced walkthrough above. `play` plays a whole scenario file instead, mirroring
+`./scenario-player/live_demo.sh play` for the FSM loops:
 
 ```bash
-python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
+./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor
 ```
 
-This is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run` are (it calls
-`scenario-player/seed.py`'s functions directly, not Airflow) -- run it against `$NGT_DEV_HOME` while
-`./airflow_automation/airflow_demo/airflow_demo.sh start` is running to exercise the current Airflow-based pipeline --
-the same scenario files play unchanged against the FSM loops via `./scenario-player/live_demo.sh play`.
+It sets up `$NGT_DEV_HOME` and this checkout's Airflow database if they aren't there, starts
+whichever of the four processes aren't running, unpauses the watch DAGs and waits until the
+triggerer is running their watchers, then passes every argument straight to
+`scenario-player/scenario_player.py` (see "Scripting a timed sequence of runs/lumisections"
+above for its flags). `--dry-run` and `--help` skip the bring-up, since they
+play nothing. The player itself is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run`
+are -- it calls `scenario-player/seed.py`'s functions directly, not Airflow -- so the same
+scenario files play unchanged against both engines. Replaying a scenario needs
+`reset-scenario` first: the watchers remember the run numbers they've already handled.
+
+TODO: the shipped `expect:` blocks allow a repeated final payload and uploads after it, for the FSM
+loops' end-of-run re-upload -- so against Airflow they also let through a DAG re-firing after the
+run ended, or a duplicate from two overlapping Step 4 runs.
 
 Run `./airflow_automation/airflow_demo/airflow_demo.sh` with no arguments for the full command list. All demo *data* lives
 under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside this repo) --
@@ -918,12 +935,12 @@ number in a test scenario) keeps its file watcher polling until the run-end grac
 the run never ends, `step2.py`'s own give-up timer) expires -- inherited from
 `oms.find_new_run`/`check_ls_for_processing` unchanged.
 
-Quick start (assumes `airflow_automation/airflow_demo/airflow_demo.sh setup` and `start` have
-already been run):
+Quick start (`play` sets up, starts and unpauses whatever isn't yet -- unpausing the watch DAGs is
+also what starts the 4 AssetWatchers in the triggerer; see "Playing a scenario against Airflow"
+above):
 
 ```bash
-./airflow_automation/airflow_demo/airflow_demo.sh unpause-watch            # also starts the 4 AssetWatchers in the triggerer
-python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
 # watch Asset ngt://runs -> ngt_watch_run_primer -> Asset ngt://files/ecalpedestals
 #       -> ngt_watch_process_ecalpedestals   (all 4 assets show in the UI Assets view)
 ./airflow_automation/airflow_demo/airflow_demo.sh pause-watch              # stops the watchers
