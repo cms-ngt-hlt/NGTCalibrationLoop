@@ -1,0 +1,53 @@
+# Per-checkout overrides for airflow_automation/airflow_demo/airflow_env.sh. Copy to
+# local_airflow_env.sh (gitignored, same directory) and keep only the lines you want to
+# change -- airflow_env.sh sources it before applying its defaults, so a plain assignment here
+# wins. It sees $REPO_DIR, $NGT_DEV_HOME, $NGT_INSTANCE and $NGT_INSTANCE_HASH (rename the
+# instance in scenario-player/local_sim_env.sh -- see local_sim_env.sh.example -- to change
+# what the defaults below derive from). A setting made here beats the same variable exported in
+# your shell, and either way reaches all four Airflow processes: airflow_demo.sh hands its tmux
+# sessions the values exactly as it resolved them. NGT_SKIP_LOCAL_ENV=1 in the environment skips
+# this file (the test suite sets it).
+#
+# Not executed on its own -- no shebang or `export` needed. Everything is shown with its default.
+
+# The venv the demo scripts activate.
+#NGT_AIRFLOW_VENV="$HOME/airflow3-ngt-venv"
+
+# Airflow's own state: airflow.cfg (incl. the JWT secrets), task logs.
+#AIRFLOW_HOME="$HOME/airflow3-ngt-$NGT_INSTANCE"
+
+# Metadata DB, created by `airflow_demo.sh setup` if missing. The role needs CREATEDB.
+#NGT_AIRFLOW_DB_HOST="localhost"
+#NGT_AIRFLOW_DB_PORT="5432"
+#NGT_AIRFLOW_DB_USER="airflow_ngt"
+#NGT_AIRFLOW_DB_PASSWORD="airflow_ngt"
+#NGT_AIRFLOW_DB_NAME="airflow3_ngt_$NGT_INSTANCE"
+# ...or any other database entirely (then creating it is up to you):
+#AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://user:password@host/dbname"
+
+# API server / UI port (default: 8100 + a hash of the checkout's path, i.e. 8100-8899), and
+# the scheduler's and triggerer's task-log servers (default: that port + 1000 / + 2000).
+#NGT_AIRFLOW_PORT=8100
+#AIRFLOW__LOGGING__WORKER_LOG_SERVER_PORT=9100
+#AIRFLOW__LOGGING__TRIGGER_LOG_SERVER_PORT=10100
+# Left alone, follows NGT_AIRFLOW_PORT; set only to point workers at a differently-reached API server.
+#AIRFLOW__CORE__EXECUTION_API_SERVER_URL="http://localhost:$NGT_AIRFLOW_PORT/execution/"
+
+# Prefix of the four tmux sessions (<prefix>Scheduler, DagProcessor, ApiServer, Triggerer).
+#NGT_AIRFLOW_TMUX_PREFIX="NGTAirflow_${NGT_INSTANCE}_"
+
+# Which DAGs Airflow loads, executor, example DAGs.
+#AIRFLOW__CORE__DAGS_FOLDER="$REPO_DIR/airflow_automation/airflow_dags"
+#AIRFLOW__CORE__EXECUTOR="LocalExecutor"
+#AIRFLOW__CORE__LOAD_EXAMPLES="False"
+
+# How often the dag-processor rescans the DAGs folder, seconds.
+#AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL=15
+#AIRFLOW__DAG_PROCESSOR__MIN_FILE_PROCESS_INTERVAL=10
+
+# UI: expose the config page; no-login all-admins mode (dev/demo only).
+#AIRFLOW__API__EXPOSE_CONFIG="True"
+#AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS="True"
+
+# The file watchers' grace period after a run ends, seconds (demo default 20; production 1800).
+#NGT_RUN_END_GRACE_SECONDS=20

@@ -62,6 +62,15 @@ def _reset_oms_stub():
     omsapi.reset()
 
 
+@pytest.fixture(autouse=True)
+def _skip_local_env_overrides(monkeypatch):
+    """A developer's gitignored scenario-player/local_sim_env.sh (or local_airflow_env.sh) beats
+    the environment, so an NGT_DEV_HOME in it would send every test that spawns sim_env.sh or
+    live_demo.sh into that real scratch environment instead of the test's own. With this set,
+    sim_env.sh and airflow_env.sh ignore both files."""
+    monkeypatch.setenv("NGT_SKIP_LOCAL_ENV", "1")
+
+
 @pytest.fixture
 def isolated_env(tmp_path, monkeypatch):
     """Redirect all filesystem paths the loop scripts use into tmp_path.

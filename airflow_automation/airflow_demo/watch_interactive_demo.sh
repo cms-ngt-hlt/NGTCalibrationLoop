@@ -37,7 +37,9 @@ set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AIRFLOW_DEMO="$REPO_DIR/airflow_automation/airflow_demo/airflow_demo.sh"
-export NGT_DEV_HOME="${NGT_DEV_HOME:-$REPO_DIR/demo-env}"
+# Sets NGT_DEV_HOME/NGT_AIRFLOW_VENV/... -- this checkout's defaults plus any local_*_env.sh overrides.
+# shellcheck disable=SC1091
+source "$REPO_DIR/airflow_automation/airflow_demo/airflow_env.sh"
 
 CALIBRATION="EcalPedestals"
 RUN=399100
@@ -115,8 +117,8 @@ wait_until_glob() {
 }
 
 activate_airflow() {
-  source "$HOME/airflow3-ngt-venv/bin/activate" 2>/dev/null
   source "$REPO_DIR/airflow_automation/airflow_demo/airflow_env.sh" 2>/dev/null
+  source "$NGT_AIRFLOW_VENV/bin/activate" 2>/dev/null
 }
 
 show_dag_runs() {
@@ -158,8 +160,8 @@ banner "NGT Calibration Loop -- AssetWatcher (all-static-asset) DAG design live 
 note "calibration=$CALIBRATION  run=$RUN  ls=$NUM_LS"
 note "\$NGT_DEV_HOME=$NGT_DEV_HOME"
 note "see watch_asset_scheduling_design.md for what run_primer / the watchers / process actually do"
-if [ ! -f "$HOME/airflow3-ngt-venv/bin/activate" ]; then
-  echo "No Airflow venv at ~/airflow3-ngt-venv -- see README.md's Airflow setup section" >&2
+if [ ! -f "$NGT_AIRFLOW_VENV/bin/activate" ]; then
+  echo "No Airflow venv at $NGT_AIRFLOW_VENV -- see README.md's Airflow setup section" >&2
   exit 1
 fi
 command -v tmux >/dev/null || { echo "tmux is required" >&2; exit 1; }

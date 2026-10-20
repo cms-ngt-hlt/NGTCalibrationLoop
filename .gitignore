@@ -11,3 +11,5 @@ __pycache__/
 /cc-exports/
 /.claude/
 CERNBox*.lnk
+/scenario-player/local_sim_env.sh
+/airflow_automation/airflow_demo/local_airflow_env.sh

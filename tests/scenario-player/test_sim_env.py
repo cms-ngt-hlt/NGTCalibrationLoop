@@ -5,6 +5,8 @@ tests/scenario-player/test_fake_toolchain_isolation.py these spawn a real bash, 
 shell sees after sourcing it.
 """
 
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,3 +65,33 @@ def test_env_sh_wires_up_fault_injection(env_sh):
     assert _sourced(env_sh, 'echo "$NGT_FAULTS_DIR"') == str(env_sh / "faults")
     found = _sourced(env_sh, f'"{sys.executable}" -c "import omsapi, faults; print(faults.__file__)"')
     assert Path(found).resolve() == (REPO_ROOT / "scenario-player" / "faults.py").resolve()
+
+
+def _resolved_dev_home(tmp_path, local_sim_env, **env):
+    """$NGT_DEV_HOME as a clean bash resolves it from a copy of sim_env.sh that has
+    `local_sim_env` beside it -- a scratch checkout, so the real one's file is never touched."""
+    scenario_player = tmp_path / "checkout" / "scenario-player"
+    scenario_player.mkdir(parents=True, exist_ok=True)
+    shutil.copy(SIM_ENV, scenario_player / "sim_env.sh")
+    (scenario_player / "local_sim_env.sh").write_text(local_sim_env, encoding="utf-8")
+    result = subprocess.run(
+        ["env", "-i", "PATH=/usr/bin:/bin", *(f"{k}={v}" for k, v in env.items()), "bash", "-c",
+         f'source "{scenario_player / "sim_env.sh"}" && echo "$NGT_DEV_HOME"'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.strip()
+
+
+def test_local_sim_env_beats_the_environment_unless_skipped(tmp_path):
+    local = 'NGT_DEV_HOME="/from/local_sim_env"\n'
+    assert _resolved_dev_home(tmp_path, local, NGT_DEV_HOME="/from/env") == "/from/local_sim_env"
+    assert _resolved_dev_home(tmp_path, local, NGT_DEV_HOME="/from/env", NGT_SKIP_LOCAL_ENV="1") == "/from/env"
+
+
+def test_the_suite_skips_local_env_files():
+    """tests/conftest.py's autouse fixture -- what keeps the real scratch environment a developer's
+    local_sim_env.sh may name away from the tests that spawn sim_env.sh or live_demo.sh."""
+    assert os.environ.get("NGT_SKIP_LOCAL_ENV") == "1"

@@ -1,0 +1,26 @@
+# Per-checkout overrides for scenario-player/sim_env.sh. Copy to local_sim_env.sh (gitignored,
+# same directory) and keep only the lines you want to change -- sim_env.sh sources it before
+# applying its defaults, so a plain assignment here wins, over the environment too. It sees
+# $REPO_DIR and nothing else yet; everything below is shown with its default. live_demo.sh and
+# airflow_demo.sh both source sim_env.sh, so both pick it up. NGT_SKIP_LOCAL_ENV=1 in the
+# environment skips this file (the test suite sets it).
+#
+# Not executed on its own -- no shebang or `export` needed.
+
+# What names every per-checkout resource of every engine adapter (Airflow home, Postgres
+# database, tmux sessions, ports -- see airflow_automation/airflow_demo/airflow_env.sh).
+# Default: this checkout's directory name + a short hash of its full path. Set a short,
+# readable one (lowercase letters, digits, underscores: it ends up in a database name).
+#NGT_INSTANCE="mycheckout"
+#NGT_INSTANCE_HASH=1234567        # the number the default ports are derived from
+
+# Where all simulator scratch state lives (fake OMS runs, EOS files, outputs, logs, conddb/).
+#NGT_DEV_HOME="$REPO_DIR/demo-env"
+
+# The fake toolchain's identity, written into ngtParameters.jsn (placeholders; nothing reads them).
+#NGT_SIM_CMSSW_VERSION="CMSSW_16_0_7_patch1"
+#NGT_SIM_SCRAM_ARCH="el8_amd64_gcc13"
+#NGT_SIM_GLOBAL_TAG="160X_dataRun3_ExpressNGT_v0"
+
+# live_demo.sh's Step 3/4 poll interval, seconds (production default: 60).
+#NGT_LOOP_SLEEP_SECONDS=5

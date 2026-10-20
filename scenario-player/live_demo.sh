@@ -17,7 +17,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# NGT_DEV_HOME, NGT_INSTANCE and ngt_tmux_new_session are defined here (if unset)
+# NGT_DEV_HOME, NGT_INSTANCE, ngt_tmux_new_session and the simulator's other settings, local_sim_env.sh's
+# included, are defined here (if unset)
 # Note: the disable silences sourcing file from runtime-only path
 # shellcheck disable=SC1091
 source "$REPO_DIR/scenario-player/sim_env.sh"
@@ -37,7 +38,8 @@ Setup:
                                           entirely -- every fake run, EOS file, output and log.
                                           \`setup\` (or \`play\`) recreates it
 
-Configuration (overridable via environment variables):
+Configuration (overridable via environment variables, or persistently via the gitignored
+scenario-player/local_sim_env.sh -- see local_sim_env.sh.example):
   NGT_DEV_HOME              scratch state directory          (default: $REPO_DIR/demo-env)
   NGT_INSTANCE              names tmux sessions              (default: see sim_env.sh)
   NGT_LOOP_SLEEP_SECONDS    Step 3/4 poll interval, seconds  (default: 5; production default is 60)

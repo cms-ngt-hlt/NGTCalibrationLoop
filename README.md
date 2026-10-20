@@ -595,17 +595,37 @@ pip install psycopg2-binary asyncpg    # asyncpg: Airflow 3 also opens an async
 pip install -e .                       # ngt_calibration_loop, used by the DAGs
 pip install -e tests/stubs             # the omsapi test-stub, see its note below
 
-# 2. Postgres (one-time, needs sudo). Named distinctly from any pre-existing
-#    Airflow 2.x install's database rather than reusing it in place -- see
-#    airflow_automation/airflow_demo/airflow_env.sh's comment for why.
+# 2. Postgres (one-time, needs sudo): just the role. It needs CREATEDB because each
+#    checkout of this repo gets its own database (step 3), named distinctly from any
+#    pre-existing Airflow 2.x install's -- see airflow_automation/airflow_demo/airflow_env.sh.
 sudo apt-get install -y postgresql
-sudo -u postgres psql -c "CREATE ROLE airflow_ngt WITH LOGIN PASSWORD 'airflow_ngt';"  # skip if it already exists
-sudo -u postgres psql -c "CREATE DATABASE airflow3_ngt OWNER airflow_ngt;"
+sudo -u postgres psql -c "CREATE ROLE airflow_ngt WITH LOGIN CREATEDB PASSWORD 'airflow_ngt';"  # skip if it already exists
+# (a role created earlier without CREATEDB: ALTER ROLE airflow_ngt CREATEDB;)
 
-# 3. Initialize Airflow against that DB
-source airflow_automation/airflow_demo/airflow_env.sh              # AIRFLOW_HOME, executor, DB, DAGs folder, auth
-airflow db migrate
+# 3. Initialize Airflow: create this checkout's database and migrate it
+./airflow_automation/airflow_demo/airflow_demo.sh setup
+#    -- by hand instead: `source airflow_automation/airflow_demo/airflow_env.sh` (AIRFLOW_HOME,
+#    executor, DB, DAGs folder, auth), `createdb` the database it names, then `airflow db migrate`
 ```
+
+**Running several checkouts side by side.** Everything that could collide between two clones of
+this repo on one machine defaults to a name derived from the clone's directory
+(`$NGT_INSTANCE`: its basename plus a short hash of its full path): the Airflow home
+(`~/airflow3-ngt-<instance>`), the Postgres database (`airflow3_ngt_<instance>`), the API
+server/UI port (8100-8899, from the same hash), the two task-log server ports, the tmux session
+names (`NGTAirflow_<instance>_*`) and `$NGT_DEV_HOME` (`./demo-env`). So two clones need no
+configuration to run isolated; `./airflow_automation/airflow_demo/airflow_demo.sh ui` prints a clone's
+URL. Every one of those values is overridable -- from the environment, or persistently from
+the gitignored `airflow_automation/airflow_demo/local_airflow_env.sh` (Airflow side) and
+`scenario-player/local_sim_env.sh` (simulator side, read by `live_demo.sh` too), which are
+sourced before the defaults are applied, so a value set there beats the environment
+(`NGT_SKIP_LOCAL_ENV=1` skips both files; the test suite sets it). Copy the `.example` file
+beside each to start; it lists every knob. The four Airflow processes get exactly the values
+`airflow_demo.sh` resolved: left alone, a tmux session inherits the tmux *server's* environment
+-- that of whichever shell first started the server, possibly another clone's `start` -- and
+that clone's settings would beat these defaults. For the same reason the demo scripts start
+the tmux server without any of these settings, so a shell you later open in it carries no
+clone's identity.
 
 No `airflow users create` step: `airflow_automation/airflow_demo/airflow_env.sh` sets
 `AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS=True`, so Airflow 3's Simple Auth Manager (the
@@ -750,7 +770,7 @@ Windows).
 
 ```bash
 ./airflow_automation/airflow_demo/airflow_demo.sh setup                                # create ./demo-env scratch env
-./airflow_automation/airflow_demo/airflow_demo.sh start                                 # scheduler + dag-processor + API server (:8090), tmux
+./airflow_automation/airflow_demo/airflow_demo.sh start                                 # scheduler + dag-processor + API server (port: `ui` prints it), tmux
 ./airflow_automation/airflow_demo/airflow_demo.sh unpause-watch                          # unpause the 4 DAGs (starts the watchers)
 ./airflow_automation/airflow_demo/airflow_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
 ./airflow_automation/airflow_demo/airflow_demo.sh ui                                    # print the UI URL
@@ -798,7 +818,7 @@ Two independent layers of state can go stale, and clearing one doesn't clear the
 - **The simulator's own state** (`$NGT_DEV_HOME`: fake OMS runs, EOS files, output data, logs,
   and the `conddb/` upload ledger)
   -- see "Resetting the simulator's state and the give-up timers" above. `airflow_demo.sh setup`
-  (which calls the same `sim_setup` internally) always activates `~/airflow3-ngt-venv` itself
+  (which calls the same `sim_setup` internally) always activates the Airflow venv (`$NGT_AIRFLOW_VENV`, default `~/airflow3-ngt-venv`) itself
   first. **Caution**: `./scenario-player/sim_env.sh reset` while Airflow is running is not safe
   -- confirmed live, doing this while Airflow's triggerer had in-flight watcher triggers
   (`ngt_dags_watch.py`'s `AssetWatcher`s) left them stuck polling stale state indefinitely

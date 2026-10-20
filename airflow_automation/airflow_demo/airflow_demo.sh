@@ -7,7 +7,8 @@
 # offline. Needs a Linux host (Airflow has no Windows support; WSL works fine
 # on Windows).
 #
-# Manages ONE Airflow instance running
+# Manages ONE Airflow instance per checkout (own AIRFLOW_HOME, metadata DB, port and tmux
+# sessions -- see airflow_env.sh, so several checkouts can run side by side) running
 # airflow_automation/airflow_dags/ngt_dags_watch.py (4 DAGs -- all-static-asset,
 # AssetWatcher-driven, zero cron; see its module docstring), which the
 # seed-run/add-ls/end-run/scenario_player.py-driven fake run feeds.
@@ -38,15 +39,25 @@
 # $NGT_DEV_HOME (default ./demo-env, a gitignored directory inside this repo)
 # holds the fake data/EOS/CMSSW scratch state, same default as scenario-player/seed.py
 # uses directly -- delete it any time to reset the demo data. The Airflow
-# instance itself (metadata DB, AIRFLOW_HOME) is shared/persistent -- see
-# airflow_env.sh and README.md's Airflow setup section for how it was
-# provisioned (Postgres role/db + `airflow db migrate` + admin user, one-time).
+# instance itself (metadata DB, AIRFLOW_HOME) is separate/persistent -- `setup` creates and
+# migrates this checkout's own database; see airflow_env.sh and README.md's Airflow setup
+# section for the one-time Postgres role it needs. Every default is overridable via
+# local_airflow_env.sh (see local_airflow_env.sh.example).
 
 set -euo pipefail
 
+# airflow_env.sh sources sim_env.sh itself, and both pick up the gitignored local_*_env.sh
+# overrides -- so sourcing it here (not just in activate_venv) makes every per-checkout value
+# (ports, tmux prefix, venv path, ...) available to usage and to commands that never activate.
 # shellcheck disable=SC1091
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scenario-player" && pwd)/sim_env.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/airflow_env.sh"
 CALIBRATIONS=(SiStripBad EcalPedestals BeamSpot)
+
+# tmux session names, per checkout (see airflow_env.sh's NGT_AIRFLOW_TMUX_PREFIX).
+SESSION_SCHEDULER="${NGT_AIRFLOW_TMUX_PREFIX}Scheduler"
+SESSION_DAG_PROCESSOR="${NGT_AIRFLOW_TMUX_PREFIX}DagProcessor"
+SESSION_API_SERVER="${NGT_AIRFLOW_TMUX_PREFIX}ApiServer"
+SESSION_TRIGGERER="${NGT_AIRFLOW_TMUX_PREFIX}Triggerer"
 
 usage() {
   cat <<USAGE
@@ -56,10 +67,10 @@ Setup:
   setup                                  Create/refresh \$NGT_DEV_HOME scratch data
                                           (fake EOS/CMSSW/OMS state; safe to re-run)
 
-Running Airflow (one shared instance, tmux sessions NGTAirflow*):
+Running Airflow (this checkout's own instance -- UI on :$NGT_AIRFLOW_PORT, tmux sessions ${NGT_AIRFLOW_TMUX_PREFIX}*):
   start                                   Launch scheduler + dag-processor + API server + triggerer
   stop                                    Kill all four tmux sessions
-  status                                  List running NGTAirflow* tmux sessions
+  status                                  List this checkout's running Airflow tmux sessions
   ui                                      Print the Airflow UI URL
   logs <scheduler|dag-processor|api|triggerer>   Tail -f that process's tmux console log
 
@@ -112,14 +123,35 @@ USAGE
 }
 
 activate_venv() {
-  if [ ! -f "$HOME/airflow3-ngt-venv/bin/activate" ]; then
-    echo "No Airflow venv at ~/airflow3-ngt-venv -- see README.md's Airflow setup section" >&2
+  if [ ! -f "$NGT_AIRFLOW_VENV/bin/activate" ]; then
+    echo "No Airflow venv at $NGT_AIRFLOW_VENV -- see README.md's Airflow setup section" >&2
     exit 1
   fi
   # shellcheck disable=SC1091
-  source "$HOME/airflow3-ngt-venv/bin/activate"
-  # shellcheck disable=SC1091
-  source "$REPO_DIR/airflow_automation/airflow_demo/airflow_env.sh"
+  source "$NGT_AIRFLOW_VENV/bin/activate"
+}
+
+ensure_airflow_db() {
+  # Creates this checkout's metadata database if it doesn't exist yet. Only for the database
+  # airflow_env.sh itself derived (NGT_AIRFLOW_DB_*): if AIRFLOW__DATABASE__SQL_ALCHEMY_CONN was
+  # pointed somewhere else, that database is the operator's to provision. The `airflow_ngt`
+  # role was created with CREATEDB (README.md's Airflow setup section), so no sudo is needed.
+  if [ "$AIRFLOW__DATABASE__SQL_ALCHEMY_CONN" != "$NGT_AIRFLOW_DB_CONN" ]; then
+    echo "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN is overridden -- not creating a database; make sure it exists."
+    return
+  fi
+  local exists
+  exists="$(PGPASSWORD="$NGT_AIRFLOW_DB_PASSWORD" psql -h "$NGT_AIRFLOW_DB_HOST" -p "$NGT_AIRFLOW_DB_PORT" \
+    -U "$NGT_AIRFLOW_DB_USER" -d postgres -Atc \
+    "SELECT 1 FROM pg_database WHERE datname = '$NGT_AIRFLOW_DB_NAME'")" || {
+    echo "Could not query Postgres as $NGT_AIRFLOW_DB_USER@$NGT_AIRFLOW_DB_HOST -- see README.md's Airflow setup section." >&2
+    exit 1
+  }
+  if [ -z "$exists" ]; then
+    echo "Creating Postgres database $NGT_AIRFLOW_DB_NAME (owner $NGT_AIRFLOW_DB_USER)"
+    PGPASSWORD="$NGT_AIRFLOW_DB_PASSWORD" createdb -h "$NGT_AIRFLOW_DB_HOST" -p "$NGT_AIRFLOW_DB_PORT" \
+      -U "$NGT_AIRFLOW_DB_USER" "$NGT_AIRFLOW_DB_NAME"
+  fi
 }
 
 demo_env_exports() {
@@ -143,13 +175,47 @@ ENV
 cmd_setup() {
   activate_venv
   sim_setup
+  ensure_airflow_db
+  airflow db migrate
   echo
-  echo "Set up $NGT_DEV_HOME"
+  echo "Set up $NGT_DEV_HOME and the Airflow instance in $AIRFLOW_HOME (database $NGT_AIRFLOW_DB_NAME)"
   echo "Next: $0 start"
 }
 
 tmux_console_log() {
   echo "$NGT_DEV_HOME/logs/tmux_console_airflow_$1.log"
+}
+
+session_env_file() {
+  echo "$AIRFLOW_HOME/airflow_demo_session_env.sh"
+}
+
+write_session_env() {
+  # What the four tmux sessions start from. A session's shell inherits the tmux *server's*
+  # environment -- that of whichever shell first started the server, possibly another
+  # checkout's `start` -- and inherited AIRFLOW_HOME/database/DAGs folder/ports would win over
+  # airflow_env.sh's `${VAR:-default}`s, quietly pointing this checkout's services at the other
+  # checkout's instance. So the file drops every inherited NGT_*/AIRFLOW_* variable and exports
+  # this script's own, exactly as airflow_env.sh resolved them (local_*_env.sh, then the
+  # caller's environment, then the defaults), plus PYTHONPATH. A file rather than the tmux
+  # command line, because AIRFLOW__DATABASE__SQL_ALCHEMY_CONN carries the database password and
+  # command lines are readable by every user.
+  local file v
+  file="$(session_env_file)"
+  mkdir -p "$(dirname "$file")"
+  rm -f "$file"
+  (
+    umask 077
+    {
+      echo "# Written by airflow_demo.sh start for this checkout's tmux sessions -- see its write_session_env."
+      # Single-quoted on purpose: expanded when a session sources the file, not here.
+      # shellcheck disable=SC2016
+      echo 'for _v in $(compgen -e); do case "$_v" in NGT_*|AIRFLOW_*) unset "$_v" ;; esac; done; unset _v'
+      for v in $(compgen -e); do
+        case "$v" in NGT_*|AIRFLOW_*|PYTHONPATH) printf 'export %s=%q\n' "$v" "${!v}" ;; esac
+      done
+    } > "$file"
+  )
 }
 
 start_component() {
@@ -163,17 +229,19 @@ start_component() {
     exit 1
   fi
   local log; log="$(tmux_console_log "$label")"
+  # The session starts from the settings write_session_env saved (see there for why), and
+  # ngt_tmux_new_session (sim_env.sh) keeps them out of the tmux server's own environment.
   # $NGT_DEV_HOME/env.sh is sim_env.sh's one spelling-out of the fake environment
   # (NGT_DEV_HOME itself included, which a non-default one needs to reach the fake
   # upload's ledger path) and drops any cmsenv/cmsrel shell functions that would
   # outrank the fake toolchain. The omsapi stub doesn't rely on its PYTHONPATH,
   # though: PYTHONPATH set in the launching shell was not reliably observed to reach
   # Airflow's forked/spawned worker subprocesses in testing, so sim_setup also
-  # pip-installs tests/stubs into ~/airflow3-ngt-venv. Plain -c, not -lc, as in
+  # pip-installs tests/stubs into $NGT_AIRFLOW_VENV. Plain -c, not -lc, as in
   # live_demo.sh: nothing here needs the operator's login dotfiles.
-  tmux new-session -d -s "$session" "bash -c '
-    source \"$HOME/airflow3-ngt-venv/bin/activate\"
-    source \"$REPO_DIR/airflow_automation/airflow_demo/airflow_env.sh\"
+  ngt_tmux_new_session -d -s "$session" "bash -c '
+    source \"$(session_env_file)\"
+    source \"$NGT_AIRFLOW_VENV/bin/activate\"
     source \"$NGT_DEV_HOME/env.sh\"
     $(demo_env_exports)
     $* 2>&1 | tee \"$log\"
@@ -185,6 +253,7 @@ start_component() {
 cmd_start() {
   activate_venv
   mkdir -p "$NGT_DEV_HOME/logs"
+  write_session_env
 
   # Airflow 3 splits DAG parsing into its own mandatory process (the
   # scheduler no longer spawns it itself, unlike Airflow 2) -- the scheduler,
@@ -192,10 +261,10 @@ cmd_start() {
   # hosting ngt_dags_watch.py's AssetWatchers (see its module docstring) --
   # started unconditionally since it's harmless, near-zero-overhead idle
   # time if those DAGs are paused/unused.
-  start_component NGTAirflowScheduler scheduler airflow scheduler
-  start_component NGTAirflowDagProcessor dag-processor airflow dag-processor
-  start_component NGTAirflowApiServer api "airflow api-server -p $NGT_AIRFLOW_PORT"
-  start_component NGTAirflowTriggerer triggerer airflow triggerer
+  start_component "$SESSION_SCHEDULER" scheduler airflow scheduler
+  start_component "$SESSION_DAG_PROCESSOR" dag-processor airflow dag-processor
+  start_component "$SESSION_API_SERVER" api "airflow api-server -p $NGT_AIRFLOW_PORT"
+  start_component "$SESSION_TRIGGERER" triggerer airflow triggerer
 
   echo
   echo "Give the dag-processor ~10-15s to parse airflow_automation/airflow_dags/ before unpausing DAGs."
@@ -208,7 +277,7 @@ cmd_ui() {
 }
 
 cmd_status() {
-  tmux list-sessions 2>/dev/null | grep '^NGTAirflow' || echo "(no NGTAirflow* tmux sessions running)"
+  tmux list-sessions 2>/dev/null | grep "^$NGT_AIRFLOW_TMUX_PREFIX" || echo "(no ${NGT_AIRFLOW_TMUX_PREFIX}* tmux sessions running)"
 }
 
 cmd_logs() {
@@ -223,7 +292,7 @@ cmd_logs() {
 }
 
 cmd_stop() {
-  for session in NGTAirflowScheduler NGTAirflowDagProcessor NGTAirflowApiServer NGTAirflowTriggerer; do
+  for session in "$SESSION_SCHEDULER" "$SESSION_DAG_PROCESSOR" "$SESSION_API_SERVER" "$SESSION_TRIGGERER"; do
     if tmux has-session -t "$session" 2>/dev/null; then
       tmux kill-session -t "$session"
       echo "Killed $session"
@@ -343,7 +412,7 @@ cmd_reset_airflow() {
   # instance broken until the user figures out to restart it manually isn't
   # a usable reset.
   local was_running=0
-  if tmux has-session -t NGTAirflowScheduler 2>/dev/null; then
+  if tmux has-session -t "$SESSION_SCHEDULER" 2>/dev/null; then
     was_running=1
     cmd_stop
   fi
@@ -380,7 +449,7 @@ cmd_reset_scenario() {
   # (see _reset_ngt_watermarks' own comment). That's the only Airflow-DB side effect here --
   # it only touches the watermark rows, not the Assets/DAG history/pause state.
   local was_running=0
-  if tmux has-session -t NGTAirflowScheduler 2>/dev/null; then
+  if tmux has-session -t "$SESSION_SCHEDULER" 2>/dev/null; then
     was_running=1
     cmd_stop
   fi
