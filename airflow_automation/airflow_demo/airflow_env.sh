@@ -8,8 +8,9 @@
 # This is the Airflow-*specific* half of the live-test setup -- infrastructure
 # env vars only (executor, DB, DAGs folder, auth). The engine-agnostic half
 # (scratch env location, fake toolchain bootstrap) lives in scenario-player/sim_env.sh,
-# sourced below; demo-specific wiring (fake OMS/EOS/CMSSW toolchain env vars)
-# lives in airflow_demo.sh itself, same split scenario-player/sim_env.sh documents.
+# sourced below; the fake OMS/EOS/CMSSW toolchain env vars are in the
+# $NGT_DEV_HOME/env.sh its sim_setup writes, which airflow_demo.sh's tmux sessions
+# source after this file.
 #
 # Usage: source airflow_automation/airflow_demo/airflow_env.sh
 

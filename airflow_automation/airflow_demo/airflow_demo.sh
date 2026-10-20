@@ -123,18 +123,11 @@ activate_venv() {
 }
 
 demo_env_exports() {
-  # Printed as a block and eval'd inside the tmux session, so the scheduler
-  # (which is what actually executes task callables under LocalExecutor)
-  # inherits the fake toolchain -- same variables any engine adapter would
-  # need to wire in for its own workers.
+  # Printed as a block and eval'd inside the tmux session, after
+  # $NGT_DEV_HOME/env.sh (see start_component), so the scheduler (which is what
+  # actually executes task callables under LocalExecutor) inherits the
+  # Airflow-only settings on top of the fake toolchain env.sh already spells out.
   #
-  # NOTE: the omsapi stub is deliberately NOT wired in via PYTHONPATH here --
-  # Airflow's scheduler parses/executes DAG code in forked/spawned worker
-  # subprocesses, and PYTHONPATH set in the launching shell was not reliably
-  # observed to reach them in testing. Instead, `sim_setup` (scenario-player/sim_env.sh)
-  # pip-installs tests/stubs (a real, tiny installable package) directly into
-  # ~/airflow3-ngt-venv, so `import omsapi` resolves normally everywhere
-  # without relying on subprocess environment propagation.
   # NGT_RUN_END_GRACE_SECONDS: read by _process_tasks.py and used by the
   # file watchers (which run in the triggerer -- this block reaches
   # it too, start_component uses it for all four processes uniformly).
@@ -143,13 +136,7 @@ demo_env_exports() {
   # (5s) without racing a normal in-flight poll, so a scenario's
   # end-run resolves in seconds instead of minutes.
   cat <<ENV
-export NGT_PARAMETERS_PATH="$NGT_DEV_HOME/ngtParameters.jsn"
-export NGT_CALIBRATION_YAML_DIR="$NGT_DEV_HOME/calibrationYAML"
-export NGT_OMS_STUB_RUNS_FILE="$NGT_DEV_HOME/oms_runs.json"
-export NGT_OMS_STUB_FAULTS_FILE="$NGT_DEV_HOME/faults/oms.json"
-export NGT_FAULTS_DIR="$NGT_DEV_HOME/faults"
 export NGT_RUN_END_GRACE_SECONDS="${NGT_RUN_END_GRACE_SECONDS:-20}"
-export PATH="$NGT_DEV_HOME/bin:\$PATH"
 ENV
 }
 
@@ -171,10 +158,23 @@ start_component() {
     echo "$session already running"
     return
   fi
+  if [ ! -f "$NGT_DEV_HOME/env.sh" ]; then
+    echo "No $NGT_DEV_HOME/env.sh -- run: $0 setup" >&2
+    exit 1
+  fi
   local log; log="$(tmux_console_log "$label")"
-  tmux new-session -d -s "$session" "bash -lc '
+  # $NGT_DEV_HOME/env.sh is sim_env.sh's one spelling-out of the fake environment
+  # (NGT_DEV_HOME itself included, which a non-default one needs to reach the fake
+  # upload's ledger path) and drops any cmsenv/cmsrel shell functions that would
+  # outrank the fake toolchain. The omsapi stub doesn't rely on its PYTHONPATH,
+  # though: PYTHONPATH set in the launching shell was not reliably observed to reach
+  # Airflow's forked/spawned worker subprocesses in testing, so sim_setup also
+  # pip-installs tests/stubs into ~/airflow3-ngt-venv. Plain -c, not -lc, as in
+  # live_demo.sh: nothing here needs the operator's login dotfiles.
+  tmux new-session -d -s "$session" "bash -c '
     source \"$HOME/airflow3-ngt-venv/bin/activate\"
     source \"$REPO_DIR/airflow_automation/airflow_demo/airflow_env.sh\"
+    source \"$NGT_DEV_HOME/env.sh\"
     $(demo_env_exports)
     $* 2>&1 | tee \"$log\"
     echo \"($label exited -- press enter to close)\"; read
