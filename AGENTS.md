@@ -15,6 +15,9 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
 
 ## Repo layout
 
+- `NGTLoopStep2/3/4.py` (+ `ngt_loop_config.py`, their shared config/logging helpers) — the
+  original FSM loop scripts, still the version that runs for data taking (`tmux_launch.sh`/
+  `tmux_kill.sh` start/stop them on the calibration nodes); tests in `tests/fsm-loops/test_step{2,3,4}.py`.
 - `ngt_calibration_loop/` — processing logic (OMS/EOS queries, cmsDriver prep, batching),
   as plain functions with no Airflow dependency. `step2.py`/`step3.py`/`step4.py` per step;
   `config.py`/`oms.py`/`eos.py`/`shell.py` shared helpers; `original_fsm_only/` the few
@@ -30,7 +33,8 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
   - `airflow_demo/` — the Airflow adapter for the live-test setup: `airflow_env.sh`,
     `airflow_demo.sh`, `*_interactive_demo.sh`.
 - `scenario-player/` — the engine-agnostic offline simulator, with no Airflow dependency:
-  `sim_env.sh`, `seed.py`, `scenario_player.py` (+ `scenarios/*.yaml`), `faults.py` (the shared
+  `sim_env.sh`, `live_demo.sh` (runs the FSM loops in tmux against it), `seed.py`,
+  `scenario_player.py` (+ `scenarios/*.yaml`), `faults.py` (the shared
   fault-injection vocabulary), `expectations.py`/`fake_conddb.py` (a scenario's `expect:` block, and
   the dummy conditions DB it's checked against -- the single definition of the provenance-manifest
   and ledger formats) and `bin/`, the fake OMS/EOS/CMSSW toolchain, which imports `faults.py` and
@@ -59,18 +63,23 @@ pip install -e .                    # ngt_calibration_loop, used by tests and th
 pip install -r requirements-dev.txt
 pytest                              # Airflow-dependent tests skip cleanly when
                                      # apache-airflow isn't installed
+pytest -m scenario                  # the slow end-to-end FSM run, deselected by default
 ```
 
-CI (`.github/workflows/pylint.yml`) runs `pylint`, `isort --check-only` and `flake8` over the FSM
-scripts (`NGTLoopStep2/3/4.py`, `ngt_loop_config.py`), `ngt_calibration_loop/` and
-`airflow_automation/` (not `tests/` or `scenario-player/`); settings are in `pyproject.toml` and
-`.flake8`, so `pip install pylint isort flake8` and running each on the targets listed in that
-workflow's `LINT_TARGETS` reproduces CI.
+CI runs three workflows. `tests.yml` runs `pytest` on Python 3.8-3.12, so everything the suite
+imports outside `airflow_automation/` (whose DAG tests skip there, without apache-airflow) has to
+stay 3.8-compatible. `scenario-test.yml` runs `pytest -m scenario`, which plays a scenario
+through `scenario-player/live_demo.sh` against the real FSM loops in tmux. `pylint.yml` runs
+`pylint`, `isort --check-only` and `flake8` over the FSM scripts (`NGTLoopStep2/3/4.py`,
+`ngt_loop_config.py`), `ngt_calibration_loop/` and `airflow_automation/` (not `tests/` or
+`scenario-player/`); settings are in `pyproject.toml` and `.flake8`, so `pip install pylint
+isort flake8` and running each on the targets listed in that workflow's `LINT_TARGETS`
+reproduces CI.
 
-For running Airflow itself, the live tmux-based demo, or `scenario-player/scenario_player.py`
-scenarios, see README.md's "Setting up and running Airflow" / "Running a live demo"
-sections, and your local override file for this machine's exact setup. Don't
-re-document those commands here — one of the two copies will drift.
+For running Airflow itself, the live tmux-based demos, or `scenario-player/scenario_player.py`
+scenarios, see README.md's "Setting up and running Airflow", "Running a live demo of the loops"
+and "Running a live demo with Airflow" sections, and your local override file for this
+machine's exact setup. Don't re-document those commands here — one of the two copies will drift.
 
 ## Committing
 

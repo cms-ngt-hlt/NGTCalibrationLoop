@@ -2,9 +2,10 @@
 Minimal in-memory stand-in for the CERN oms-api-client (gitlab.cern.ch/cmsoms/oms-api-client).
 
 The real client is not published on PyPI and requires CERN GitLab access, so it can't be
-installed in a plain local/CI environment. NGTLoopStep2.py only relies on a small slice of
-its query-builder interface (query().filter().sort().paginate().data().json()), which is
-reimplemented here against an in-memory list of "runs" that tests populate directly.
+installed in a plain local/CI environment. NGTLoopStep2.py and ngt_calibration_loop.oms only
+rely on a small slice of its query-builder interface
+(query().filter().sort().paginate().data().json()), which is reimplemented here against an
+in-memory list of "runs" that tests populate directly.
 
 This is a test double, not a general-purpose OMS client -- it has no network calls, no
 authentication, and no real REST semantics beyond simple equality-filter/sort/paginate.

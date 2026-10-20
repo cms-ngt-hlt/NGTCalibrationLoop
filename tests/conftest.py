@@ -14,7 +14,7 @@ cleanup) with every external dependency mocked out:
 - /data/ngt, /tmp/ngt, /nfshome0/sakura -> redirected to a pytest tmp_path via the
   NGT_PARAMETERS_PATH / NGT_CALIBRATION_YAML_DIR env var overrides read by the
   NGTLoopStepN.py scripts (see `_load_ngt_parameters` / `_load_calibration_config`
-  in each script)
+  in ngt_loop_config.py) and by ngt_calibration_loop/config.py
 
 No network access, no CMSSW, no real filesystem paths outside of pytest's tmp_path
 are required to run this suite.

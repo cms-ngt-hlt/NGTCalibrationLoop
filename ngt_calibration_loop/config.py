@@ -1,8 +1,10 @@
 """Loading of ngtParameters.jsn and per-calibration YAML config.
 
-Moved verbatim (same env var overrides, same defaults) from the three
-duplicated copies that used to live in NGTLoopStep2/3/4.py, so both the
-library functions and the Airflow DAGs share one implementation.
+The same loaders, with the same env var overrides and defaults, as the
+_load_ngt_parameters/_load_calibration_config that NGTLoopStep2/3/4.py share
+from ngt_loop_config.py -- a copy rather than an import, so the library
+doesn't depend on the FSM scripts. The library functions and the Airflow
+DAGs share this one.
 """
 
 import json

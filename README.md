@@ -323,6 +323,17 @@ The same mocks as above apply, except that job launches are intercepted one leve
   needed.
 - `tests/scenario-player/test_faults.py`, `tests/ngt-calib-lib/test_job_faults.py`, `tests/ngt-calib-lib/test_oms_faults.py` -- the
   declarative fault vocabulary (see "Fault injection" below).
+- `tests/scenario-player/test_fake_toolchain_provenance.py`, `tests/scenario-player/test_fake_conddb.py`,
+  `tests/scenario-player/test_scenario_expectations.py` -- the provenance chain through the fake toolchain (run as
+  real subprocesses), the conditions-DB ledger and the `expect:` matching rules (see "Validating
+  the result" below).
+- `tests/scenario-player/test_fake_toolchain_isolation.py`, `tests/scenario-player/test_sim_env.py` -- what `sim_env.sh`'s
+  generated `env.sh` gives a shell: the fake toolchain winning over an exported `cmsenv`, and the
+  fault-injection paths (with a real bash).
+- `tests/fsm-loops/test_scenarios.py` -- the slow end-to-end runs, deselected by default
+  (`pytest -m scenario`; CI's `scenario-test` job): play `basic_ecal_pedestals.yaml` and
+  `fault_injection_demo.yaml` through `live_demo.sh` against the real FSM loops and check what they
+  left behind, the payloads that reached the conditions DB included.
 - `tests/airflow-ngt/test_dags_watch.py` -- DagBag import-error/structure checks for the
   AssetWatcher design, the two watcher triggers' async `run()` driven to completion against a
   fake `AssetStateStore` (plain `asyncio.run()` calls -- no `pytest-asyncio` needed), and direct
