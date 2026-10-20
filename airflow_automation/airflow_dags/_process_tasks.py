@@ -50,6 +50,13 @@ LAUNCH_RETRY_KWARGS = dict(
 UPLOAD_RETRY_KWARGS = dict(
     retries=5, retry_delay=timedelta(minutes=1), retry_exponential_backoff=True, execution_timeout=timedelta(minutes=30)
 )
+# ngt_dags_watch.py's prime_run queries OMS again (step2.find_new_run, per
+# calibration), and by then the run watcher has marked the run as seen and won't
+# announce it again -- so a prime_run lost to a passing OMS outage loses the run.
+# Short first retries: the run has to still look eligible in OMS when one succeeds.
+PRIME_RETRY_KWARGS = dict(
+    retries=5, retry_delay=timedelta(seconds=30), retry_exponential_backoff=True, execution_timeout=timedelta(minutes=10)
+)
 
 
 def run_and_file_from_context(context):

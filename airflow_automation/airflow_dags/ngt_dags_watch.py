@@ -21,7 +21,9 @@ Four static Assets, four AssetWatchers, four DAGs, zero cron:
   runStart.log. That on-disk state is what the file watchers gate on, so a
   run-asset update is what "starts" per-calibration file watching (the
   watchers themselves are always running -- an AssetWatcher can't be spawned
-  by an event -- they're just idle until a run dir appears).
+  by an event -- they're just idle until a run dir appears). Retried on failure
+  (_process_tasks.PRIME_RETRY_KWARGS): find_new_run raises during an OMS outage,
+  and the run watcher won't announce the same run twice.
 
 - Asset("ngt://files/<cal>")  with  AssetWatcher(LumisectionFileWatcherTrigger)
   x3 -- each watches its calibration's currently-active run dir (newest
@@ -147,7 +149,7 @@ def _build_run_primer_dag():
         default_args=pp.DEFAULT_ARGS,
         tags=["ngt", "watch", "run-primer"],
     ) as dag:
-        PythonOperator(task_id="prime_run", python_callable=_prime_run)
+        PythonOperator(task_id="prime_run", python_callable=_prime_run, **pp.PRIME_RETRY_KWARGS)
     return dag
 
 

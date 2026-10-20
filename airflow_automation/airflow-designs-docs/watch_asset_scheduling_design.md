@@ -154,11 +154,22 @@ While that DAG is unpaused, the triggerer runs `RunWatcherTrigger.run()` continu
 - **dedup**: already-yielded run numbers are held in this Asset's `AssetStateStore` under
   `seen_runs` (see §4); `oms.find_new_run`'s own "working dir already exists" check is a second
   line of defence once the primer has run.
+- **OMS outages**: `oms.find_new_run` raises on a connection error, timeout or HTTP error (unlike
+  the other OMS helpers, which fall back to a safe default), and `run()` catches that rather than
+  letting the trigger die: it logs the first failed poll with its traceback, keeps polling at
+  `poll_interval`, and logs how many polls failed once OMS answers again. A trigger that raises is
+  restarted by the triggerer straight away (confirmed live against Airflow 3.3.1), so without the
+  guard an outage was a restart loop querying OMS every couple of seconds, with two error lines
+  ("Trigger ID 2 exited with error ...", "... Dependent tasks will be failed") per attempt.
 
 ### `ngt_watch_run_primer` — `schedule=[Asset("ngt://runs")]`
 
 One task, `prime_run`: calls `step2.find_new_run(calibration)` (**unchanged**, idempotent) for
 each of the three calibrations, which creates `DATA_BASE_PATH/<cal>/run<N>/` + `runStart.log`.
+That queries OMS again, so `prime_run` is retried (`_process_tasks.PRIME_RETRY_KWARGS`: 5 retries,
+30 s doubling): the watcher has already marked the run seen and won't announce it again, so a
+`prime_run` lost to an OMS outage would lose the run. Confirmed live without the retries: OMS went
+down just after the watcher announced a run, `prime_run` failed once, and the run was never primed.
 
 This is the answer to "a run-asset update *starts* per-calibration file watching": an
 `AssetWatcher` cannot be spawned by an event — it is registered at DAG-parse time and runs from
@@ -310,8 +321,10 @@ skip-if-already-processed carry that weight instead.
 `tests/airflow-ngt/test_dags_watch.py` — DagBag wiring (every DAG parses; each watch DAG is
 `AssetTriggeredTimetable`, no cron), and the
 triggers' async `run()` driven to completion with an in-memory fake `AssetStateStore` —
-`RunWatcherTrigger` yields for a new run / skips a seen run / falls back to disk with no store;
+`RunWatcherTrigger` yields for a new run / skips a seen run / falls back to disk with no store /
+keeps polling through an OMS outage and announces the run once OMS answers again;
 `LumisectionFileWatcherTrigger` yields one event per new file, skips emitted files, finalizes on
 `check_ls_for_processing` `final` or the OMS run-end grace, stays idle with no run dir. Plus
-`prime_run` (creates the 3 working dirs, idempotent) and `run_and_file_from_context` (conf and
-Asset-event shapes). Run: `pytest tests/airflow-ngt/test_dags_watch.py`.
+`prime_run` (creates the 3 working dirs, idempotent, fails -- to be retried -- on an OMS outage)
+and `run_and_file_from_context` (conf and Asset-event shapes). Run:
+`pytest tests/airflow-ngt/test_dags_watch.py`.

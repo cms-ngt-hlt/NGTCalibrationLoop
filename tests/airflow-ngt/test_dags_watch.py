@@ -20,6 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 pytest.importorskip("airflow")
 
@@ -229,6 +230,38 @@ def test_run_watcher_idle_when_no_run(isolated_env):
     assert _drive(t) is None
 
 
+def test_run_watcher_keeps_polling_through_an_oms_outage(isolated_env):
+    """oms.find_new_run raises during an outage (tests/ngt-calib-lib/test_oms_faults.py pins that); the watcher
+    must not -- a raising trigger is restarted straight away by the triggerer, a restart loop."""
+    omsapi.configure_runs([make_run(398601, start_time=datetime.now(timezone.utc) - timedelta(minutes=5))])
+    omsapi.set_failure("connection_error", times=None)
+    t = trig.RunWatcherTrigger(poll_interval=0.01)
+    t.asset_state_store = FakeAssetStateStore()
+
+    assert _drive(t) is None  # still polling, nothing raised
+
+
+def test_run_watcher_announces_a_run_once_oms_answers_again(isolated_env, monkeypatch):
+    logged = []
+    log = SimpleNamespace(
+        info=lambda msg, *args, **kwargs: logged.append(("info", msg)),
+        warning=lambda msg, *args, **kwargs: logged.append(("warning", msg)),
+    )
+    monkeypatch.setattr(trig.RunWatcherTrigger, "log", property(lambda self: log))
+    omsapi.configure_runs([make_run(398601, start_time=datetime.now(timezone.utc) - timedelta(minutes=5))])
+    omsapi.set_failure("connection_error", times=3)
+    t = trig.RunWatcherTrigger(poll_interval=0.01)
+    t.asset_state_store = FakeAssetStateStore()
+
+    events = _drive(t)
+
+    assert [e["run_number"] for e in events] == [398601]
+    # One warning for the whole outage, not one per failed poll, and a line when it's over.
+    warnings = [msg for level, msg in logged if level == "warning"]
+    assert len(warnings) == 1 and "OMS query for new runs failed" in warnings[0]
+    assert any("after 3 failed poll(s)" in msg for level, msg in logged if level == "info")
+
+
 # --- LumisectionFileWatcherTrigger ---------------------------------------------
 
 
@@ -336,6 +369,18 @@ def test_prime_run_is_idempotent(isolated_env):
     ctx = {"triggering_asset_events": make_triggering({"run_number": "398601"})}
     watch._prime_run(**ctx)
     watch._prime_run(**ctx)  # must not raise on the second call
+
+
+def test_prime_run_fails_on_an_oms_outage_so_airflow_retries_it(isolated_env, dagbag):
+    """The run watcher has already marked the run seen, so prime_run must not swallow an outage
+    as "nothing to prime" -- it fails, and its retries (PRIME_RETRY_KWARGS) prime the run later."""
+    omsapi.configure_runs([make_run(398601, start_time=datetime.now(timezone.utc) - timedelta(minutes=5))])
+    omsapi.set_failure("connection_error")
+    with pytest.raises(requests.exceptions.ConnectionError):
+        watch._prime_run(**{"triggering_asset_events": make_triggering({"run_number": "398601"})})
+
+    prime_run = dagbag.dags[watch.RUN_PRIMER_DAG_ID].get_task("prime_run")
+    assert prime_run.retries == pp.PRIME_RETRY_KWARGS["retries"] > 0
 
 
 # --- run_and_file_from_context (the _process_tasks input seam) ---------------

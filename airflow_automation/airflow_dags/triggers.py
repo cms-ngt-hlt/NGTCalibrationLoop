@@ -105,6 +105,15 @@ class RunWatcherTrigger(BaseEventTrigger):
     ``DATA_BASE_PATH/_ngt_watch_runs_seen.log``. `oms.find_new_run`'s own
     "working dir already exists" check is a second line of defence once the
     primer has run.
+
+    An OMS outage doesn't end the watch. `oms.find_new_run` raises on one
+    (connection error, timeout, HTTP error) rather than falling back the way the
+    other OMS helpers do, and a trigger that raises is only restarted by the
+    triggerer -- immediately, so an outage used to turn the watcher into a
+    restart loop hitting OMS every couple of seconds and logging two errors each
+    time. Instead the first failed poll is logged with its traceback, polling
+    continues at `poll_interval`, and the first successful one after a streak
+    says how many failed.
     """
 
     def __init__(self, poll_interval: float = 5.0):
@@ -138,8 +147,22 @@ class RunWatcherTrigger(BaseEventTrigger):
         self.log.info("Watching OMS for a new run (Asset ngt://runs)")
         accessor = _state_accessor(self, RUNS_ASSET_NAME, RUNS_ASSET_URI)
         fallback = self._seen_fallback_path()
+        failed_polls = 0
         while True:
-            latched = await asyncio.to_thread(self._find_run)
+            try:
+                latched = await asyncio.to_thread(self._find_run)
+            except Exception:  # an OMS outage -- see the class docstring
+                failed_polls += 1
+                if failed_polls == 1:
+                    self.log.warning(
+                        f"OMS query for new runs failed -- polling on every {self.poll_interval}s until it answers",
+                        exc_info=True,
+                    )
+                await asyncio.sleep(self.poll_interval)
+                continue
+            if failed_polls:
+                self.log.info(f"OMS answered again after {failed_polls} failed poll(s)")
+                failed_polls = 0
             if latched is not None:
                 seen = {str(x) for x in _watermark_get(accessor, "seen_runs", fallback)}
                 if str(latched.run_number) not in seen:
