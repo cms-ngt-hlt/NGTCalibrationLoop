@@ -793,7 +793,10 @@ scenario against Airflow" below):
 That last command is also the guided walkthrough, the same as the FSM loops' (`live_demo.sh play
 ... --interactive --monitor`): each step of the scenario waits for Enter, and every file the
 pipeline produces is reported as it appears, so you can watch the run watcher -> run primer ->
-file watcher -> process chain actually happening. Play
+file watcher -> process chain actually happening. Next to those files, `--monitor` makes `play`
+report Airflow's side of the same activity as it happens -- each Asset event, the DagRun it
+triggers and that DagRun's state, any task retry (`airflow_automation/airflow_demo/watch_views.py`)
+-- and sum it up at the end, with the watchers' `AssetStateStore` watermarks. Play
 `scenario-player/scenarios/total_fault_injection_demo.yaml` the same way to watch crashed jobs retrying.
 
 ### Playing a scenario against Airflow
@@ -812,7 +815,8 @@ whichever of the four processes aren't running, unpauses the watch DAGs and wait
 triggerer is running their watchers, then passes every argument straight to
 `scenario-player/scenario_player.py` (see "Scripting a timed sequence of runs/lumisections"
 above for its flags). `--dry-run` and `--help` skip the bring-up, since they
-play nothing. The player itself is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run`
+play nothing; `--monitor` adds Airflow's view of the run to the player's file reports (see
+above). The player itself is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run`
 are -- it calls `scenario-player/seed.py`'s functions directly, not Airflow -- so the same
 scenario files play unchanged against both engines. `play` warns when the scenario's runs were
 already played against this instance (the watchers remember the run numbers they've handled, and

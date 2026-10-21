@@ -31,7 +31,7 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
   - `airflow-designs-docs/` — write-ups of a DAG design that's actually built and living in
     `airflow_dags/` (one doc per design: sequence diagrams, batching semantics, trade-offs).
   - `airflow_demo/` — the Airflow adapter for the live-test setup: `airflow_env.sh`,
-    `airflow_demo.sh`.
+    `airflow_demo.sh` (+ `watch_views.py`, the Airflow-side views `play --monitor` shows).
 - `scenario-player/` — the engine-agnostic offline simulator, with no Airflow dependency:
   `sim_env.sh`, `live_demo.sh` (runs the FSM loops in tmux against it), `seed.py`,
   `scenario_player.py` (+ `scenarios/*.yaml`), `faults.py` (the shared

@@ -55,6 +55,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/airflow_env.sh"
 CALIBRATIONS=(SiStripBad EcalPedestals BeamSpot)
 PLAYER="$REPO_DIR/scenario-player/scenario_player.py"
+VIEWS="$REPO_DIR/airflow_automation/airflow_demo/watch_views.py"
 
 # tmux session names, per checkout (see airflow_env.sh's NGT_AIRFLOW_TMUX_PREFIX).
 SESSION_SCHEDULER="${NGT_AIRFLOW_TMUX_PREFIX}Scheduler"
@@ -115,7 +116,9 @@ identical to any other engine adapter -- delegates straight to scenario-player/s
                                           passes every argument straight to scenario_player.py
                                           (--interactive, --monitor, --speed, --dry-run -- run it
                                           with --help). With --interactive --monitor this is the
-                                          guided walkthrough. Warns when \$NGT_DEV_HOME isn't fresh
+                                          guided walkthrough; --monitor also reports Airflow's side
+                                          (Asset events, DagRuns, task retries -- watch_views.py)
+                                          and sums it up at the end. Warns when \$NGT_DEV_HOME isn't fresh
                                           for the scenario (reset-scenario clears it): the
                                           watchers ignore a run number they've already handled.
 
@@ -542,7 +545,7 @@ cmd_play() {
   # scenario-player/live_demo.sh's `play`, for Airflow: everything a scenario needs from a cold
   # start, then the scenario itself. Every argument goes to scenario_player.py untouched, and
   # the ones that play nothing skip the bring-up.
-  local arg session scenario="" skip=0
+  local arg session scenario="" skip=0 views=0
   for arg in "$@"; do
     if [ "$skip" = 1 ]; then skip=0; continue; fi
     case "$arg" in
@@ -550,6 +553,7 @@ cmd_play() {
         activate_venv
         exec python3 "$PLAYER" "$@"
         ;;
+      --monitor) views=1 ;;
       --speed) skip=1 ;;  # its value isn't the scenario
       -*) ;;
       *) [ -n "$scenario" ] || scenario="$arg" ;;
@@ -577,7 +581,27 @@ cmd_play() {
   _wait_for_watch_design live
   echo
   _warn_if_not_fresh "$scenario"
-  python3 "$PLAYER" "$@"
+  if [ "$views" = 0 ]; then
+    python3 "$PLAYER" "$@"
+    return
+  fi
+  # --monitor: the player reports the files the pipeline produces; watch_views.py reports what
+  # Airflow did to produce them, alongside, then sums it up once the player is done.
+  local since follower status=0
+  since="$(date -u +%Y-%m-%dT%H:%M:%S)"
+  python3 "$VIEWS" follow "$since" &
+  follower=$!
+  # The pid expanded now: the trap runs after this function's locals are gone.
+  # shellcheck disable=SC2064
+  trap "kill $follower 2>/dev/null" EXIT
+  python3 "$PLAYER" "$@" || status=$?
+  sleep 3  # the follower's last poll
+  kill "$follower" 2>/dev/null || true
+  wait "$follower" 2>/dev/null || true
+  trap - EXIT
+  echo
+  python3 "$VIEWS" summary "$since"
+  return "$status"
 }
 
 cmd_reset_scenario() {
