@@ -13,10 +13,22 @@ from pathlib import Path
 
 import omsapi
 import pytest
+import yaml
 
 from ngt_calibration_loop import config, oms, shell, step2
 
 CALIBRATION = "EcalPedestals"  # minLsToProcess=50 per calibrationYAML/EcalPedestals.yaml
+
+
+def _patch_calib_yaml(isolated_env, calibration, **step_2_config_overrides):
+    """Merge `step_2_config_overrides` into the copied calibrationYAML/
+    {calibration}.yaml -- e.g. maxLatchTimeHours, same as scenario-player/seed.py's
+    cmd_setup patches it for the live-test setup (see step2.py's
+    DEFAULT_MAX_LATCH_TIME_HOURS)."""
+    path = isolated_env.calib_yaml_dir / f"{calibration}.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["step_2_config"].update(step_2_config_overrides)
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 def make_run(run_number, start_time, end_time=None, last_ls=100):
@@ -210,6 +222,29 @@ def test_expired_latch_time_forces_final_even_with_no_new_files(isolated_env, fa
 
     decision = step2.check_ls_for_processing(ctx)
 
+    assert decision.action == "final"
+
+
+def test_max_latch_time_hours_is_configurable_per_calibration(isolated_env, fake_eos):
+    """The live-test setup (scenario-player/seed.py's cmd_setup) relies on this to make a
+    calibration that never receives matching files give up in minutes instead
+    of the production 8h default -- see step2.py's DEFAULT_MAX_LATCH_TIME_HOURS
+    and scenario-player/seed.py's FAST_MAX_LATCH_TIME_HOURS."""
+    _patch_calib_yaml(isolated_env, CALIBRATION, maxLatchTimeHours=0.001)  # ~3.6s
+
+    now = datetime.now(timezone.utc)
+    omsapi.configure_runs([make_run(398600, start_time=now, end_time=None)])
+    run_number = step2.find_new_run(CALIBRATION)
+    assert run_number == 398600
+
+    ctx = step2.build_run_context(CALIBRATION, run_number)
+    assert ctx.max_latch_time_hours == 0.001
+
+    # 1 minute old: comfortably past the tiny 3.6s override, but still well
+    # inside the 8h production default -- proves the override (not the
+    # hardcoded default) is what's actually governing this decision.
+    ctx.run_start_time = now - timedelta(minutes=1)
+    decision = step2.check_ls_for_processing(ctx)
     assert decision.action == "final"
 
 

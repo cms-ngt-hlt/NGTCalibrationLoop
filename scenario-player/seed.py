@@ -32,6 +32,12 @@ CALIB_YAML_DIR = NGT_DEV_HOME / "calibrationYAML"
 FAULTS_DIR = NGT_DEV_HOME / "faults"
 CALIBRATIONS = ("SiStripBad", "EcalPedestals", "BeamSpot")
 
+# The step library's give-up timers (optional calibrationYAML keys, see step2.DEFAULT_MAX_LATCH_TIME_HOURS
+# and step{3,4}.DEFAULT_TIMEOUT_SECONDS) default to production hours; a scenario must not wait those
+# out for a calibration that never gets files. Overridable for one that tests the give-up path itself.
+FAST_MAX_LATCH_TIME_HOURS = float(os.environ.get("NGT_TEST_MAX_LATCH_TIME_HOURS", 0.25))  # 15 min
+FAST_STEP_TIMEOUT_SECONDS = float(os.environ.get("NGT_TEST_STEP_TIMEOUT_SECONDS", 900))  # 15 min
+
 
 def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -74,6 +80,9 @@ def cmd_setup(_args):
         data = yaml.safe_load(src.read_text(encoding="utf-8"))
         data["file_in_path"] = str(NGT_DEV_HOME / "eos" / calib) + "/"
         data["step_4_config"]["cmssw_base_path"] = str(NGT_DEV_HOME / "cmssw_home") + "/"
+        data["step_2_config"]["maxLatchTimeHours"] = FAST_MAX_LATCH_TIME_HOURS
+        data["step_3_config"]["timeoutSeconds"] = FAST_STEP_TIMEOUT_SECONDS
+        data["step_4_config"]["timeoutSeconds"] = FAST_STEP_TIMEOUT_SECONDS
         (CALIB_YAML_DIR / f"{calib}.yaml").write_text(
             yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
         )
