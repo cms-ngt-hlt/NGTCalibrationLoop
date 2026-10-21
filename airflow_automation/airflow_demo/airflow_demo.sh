@@ -18,12 +18,12 @@
 # just forwards to scenario-player/seed.py, which knows nothing about Airflow -- see
 # scenario-player/sim_env.sh's module docstring for why that split exists.
 #
-# For a guided, pause-and-confirm walkthrough instead of firing everything at
-# once, use watch_interactive_demo.sh (ngt_dags_watch.py -- see
-# watch_asset_scheduling_design.md). For an unattended, timed sequence of runs/
-# lumisections (e.g. for a scripted test run), use `play`, which brings this
-# instance up and then hands a scenario file to scenario-player/scenario_player.py -- see
-# scenario-player/scenarios/.
+# For a timed sequence of runs/lumisections (e.g. for a scripted test run), use `play`,
+# which brings this instance up and then hands a scenario file to
+# scenario-player/scenario_player.py -- see scenario-player/scenarios/. With --interactive
+# --monitor it is also the guided walkthrough, the same as the FSM loops' (live_demo.sh
+# play): each step waits for Enter and every file the pipeline produces is reported as it
+# appears (what to watch for in ngt_dags_watch.py: watch_asset_scheduling_design.md).
 #
 # Quick start:
 #   ./airflow_automation/airflow_demo/airflow_demo.sh setup
@@ -114,8 +114,10 @@ identical to any other engine adapter -- delegates straight to scenario-player/s
                                           waits for the triggerer to run their watchers, then
                                           passes every argument straight to scenario_player.py
                                           (--interactive, --monitor, --speed, --dry-run -- run it
-                                          with --help). Replaying a scenario needs reset-scenario
-                                          first: the watchers ignore a run number they've seen.
+                                          with --help). With --interactive --monitor this is the
+                                          guided walkthrough. Warns when \$NGT_DEV_HOME isn't fresh
+                                          for the scenario (reset-scenario clears it): the
+                                          watchers ignore a run number they've already handled.
 
 Injecting failures (writes \$NGT_DEV_HOME/faults/<target>.json, polled by
 tests/stubs/omsapi / scenario-player/bin/cmsRun / scenario-player/bin/uploadConditions.py -- see
@@ -491,17 +493,66 @@ while True:
 PY
 }
 
+_warn_if_not_fresh() {
+  # $1: a scenario file. A scenario played on scratch state an earlier one left behind misleads
+  # rather than fails: runs this instance already handled -- a working dir left in $NGT_DEV_HOME
+  # (find_new_run skips it) or the run in the run watcher's seen_runs watermark (it never
+  # announces a run twice) -- silently do nothing. Only warns: replaying on purpose is legitimate
+  # (e.g. to check exactly that dedup). Expects activate_venv to have run.
+  local played
+  played="$(python3 - "$1" "$NGT_DEV_HOME" <<'PY' 2>/dev/null
+import json
+import sys
+from pathlib import Path
+
+import yaml
+
+dev_home = Path(sys.argv[2])
+try:
+    runs = {int(r["run"]) for r in (yaml.safe_load(Path(sys.argv[1]).read_text()) or {}).get("runs", [])}
+except Exception:
+    runs = set()
+played = {run for run in runs if any((dev_home / "data").glob(f"*/run{run}"))}
+try:
+    from airflow.models.asset import AssetModel
+    from airflow.models.asset_state_store import AssetStateStoreModel
+    from airflow.utils.session import create_session
+
+    with create_session() as session:
+        for row in (
+            session.query(AssetStateStoreModel)
+            .join(AssetModel, AssetModel.id == AssetStateStoreModel.asset_id)
+            .filter(AssetModel.uri.like("ngt://runs%"), AssetStateStoreModel.key == "seen_runs")
+        ):
+            seen = json.loads(row.value) if isinstance(row.value, str) else row.value  # stored JSON-encoded
+            played |= runs & {int(r) for r in (seen or [])}
+except Exception:
+    pass
+print(" ".join(str(run) for run in sorted(played)))
+PY
+)" || return 0
+  if [ -n "$played" ]; then
+    echo "!! \$NGT_DEV_HOME isn't fresh for this scenario -- '$0 reset-scenario' clears it:"
+    echo "!!   run(s) $played were already played against this instance: the watchers will ignore them"
+    echo
+  fi
+}
+
 cmd_play() {
   # scenario-player/live_demo.sh's `play`, for Airflow: everything a scenario needs from a cold
   # start, then the scenario itself. Every argument goes to scenario_player.py untouched, and
   # the ones that play nothing skip the bring-up.
-  local arg session
+  local arg session scenario="" skip=0
   for arg in "$@"; do
+    if [ "$skip" = 1 ]; then skip=0; continue; fi
     case "$arg" in
       -h|--help|--dry-run|--only-list-calibrations)
         activate_venv
         exec python3 "$PLAYER" "$@"
         ;;
+      --speed) skip=1 ;;  # its value isn't the scenario
+      -*) ;;
+      *) [ -n "$scenario" ] || scenario="$arg" ;;
     esac
   done
   activate_venv
@@ -525,6 +576,7 @@ cmd_play() {
   echo "Waiting for the triggerer to run the 4 watchers..."
   _wait_for_watch_design live
   echo
+  _warn_if_not_fresh "$scenario"
   python3 "$PLAYER" "$@"
 }
 

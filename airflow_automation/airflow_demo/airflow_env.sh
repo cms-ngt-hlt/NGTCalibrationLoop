@@ -37,7 +37,7 @@ if [ -z "${NGT_SKIP_LOCAL_ENV:-}" ] && [ -f "$(dirname "${BASH_SOURCE[0]}")/loca
   source "$(dirname "${BASH_SOURCE[0]}")/local_airflow_env.sh"
 fi
 
-# The venv airflow_demo.sh/watch_interactive_demo.sh activate (see README.md's setup
+# The venv airflow_demo.sh activates (see README.md's setup
 # section). Shared between checkouts by default -- it holds no per-checkout state, apart
 # from the editable installs `sim_setup` makes, which any checkout can safely repeat.
 export NGT_AIRFLOW_VENV="${NGT_AIRFLOW_VENV:-$HOME/airflow3-ngt-venv}"

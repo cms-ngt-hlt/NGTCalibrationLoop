@@ -12,7 +12,8 @@ cron/polling DAGs, no dynamically-named assets.** §1 below introduces the Airfl
 machinery it is built out of; §6 covers why the dynamically-named alternative is not on the
 table.
 
-For a hands-on walkthrough, run `./airflow_automation/airflow_demo/watch_interactive_demo.sh`.
+For a hands-on walkthrough, run
+`./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor`.
 
 ## 1. Intro: Airflow assets overview
 
@@ -261,8 +262,10 @@ The live test records which path was actually exercised.
 - **`runEnd.log` written by a trigger.** The file watcher calls `step2.finalize_cycle` as a side
   effect (like std-lib `FileDeleteTrigger` `unlink`s its file). Per-calibration.
 - **One run-discovery path at a time.** Both designs share the on-disk
-  `DATA/<cal>/run<N>/` working-dir dedup; two run detectors/watchers unpaused at once race.
-  `./airflow_automation/airflow_demo/watch_interactive_demo.sh` starts from a clean working dir.
+  `DATA/<cal>/run<N>/` working-dir dedup; two run detectors/watchers unpaused at once race. The
+  same dedup is why replaying a scenario needs `reset-scenario` first -- a run's working dir, or
+  its number in `seen_runs`, makes the watchers skip it; `airflow_demo.sh play` warns when it
+  finds either.
 - **Watchers only run while their consuming DAG is unpaused** (`dag_processing/collection.py`).
   Pausing `ngt_watch_*` stops all four watchers — which is also how you "leave it paused".
 - **Cold start.** A `schedule=[Asset(…)]` DAG is not schedulable until the asset first has an

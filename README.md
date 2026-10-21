@@ -703,8 +703,8 @@ CERN/CMS project reports, not this repo's mocked dev environment).
   simulator" above.
 - `airflow_automation/` -- everything specific to the Airflow prototype: `airflow_dags/` (the DAG
   design above), `airflow-designs-docs/` (its write-up) and `airflow_demo/` (the Airflow
-  adapter for the live-test setup below: `airflow_env.sh`, `airflow_demo.sh`, and the
-  `*_interactive_demo.sh` walkthroughs). `airflow_dags/` is still imported as the top-level
+  adapter for the live-test setup below: `airflow_env.sh` and `airflow_demo.sh`).
+  `airflow_dags/` is still imported as the top-level
   package `airflow_dags` -- `airflow_env.sh` and `tests/conftest.py` put `airflow_automation/`
   on the path for that.
 - `scenario-player/` -- the engine-agnostic offline simulator, see "The offline simulator" above:
@@ -790,16 +790,11 @@ scenario against Airflow" below):
 ./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor
 ```
 
-For a guided, narrated walkthrough that pauses between steps and shows you the relevant output
-directories/files, Assets and DAG-run history so you can watch the run watcher -> run primer ->
-file watcher -> process chain actually happening (plus a demonstration of a forced job
-failure retrying), use:
-
-```bash
-./airflow_automation/airflow_demo/watch_interactive_demo.sh                                      # EcalPedestals, 2 LS
-./airflow_automation/airflow_demo/watch_interactive_demo.sh --calibration SiStripBad --ls 4
-./airflow_automation/airflow_demo/watch_interactive_demo.sh --yes                                # don't pause between steps
-```
+That last command is also the guided walkthrough, the same as the FSM loops' (`live_demo.sh play
+... --interactive --monitor`): each step of the scenario waits for Enter, and every file the
+pipeline produces is reported as it appears, so you can watch the run watcher -> run primer ->
+file watcher -> process chain actually happening. Play
+`scenario-player/scenarios/total_fault_injection_demo.yaml` the same way to watch crashed jobs retrying.
 
 ### Playing a scenario against Airflow
 
@@ -819,8 +814,9 @@ triggerer is running their watchers, then passes every argument straight to
 above for its flags). `--dry-run` and `--help` skip the bring-up, since they
 play nothing. The player itself is the same engine-agnostic layer `seed-run`/`add-ls`/`end-run`
 are -- it calls `scenario-player/seed.py`'s functions directly, not Airflow -- so the same
-scenario files play unchanged against both engines. Replaying a scenario needs
-`reset-scenario` first: the watchers remember the run numbers they've already handled.
+scenario files play unchanged against both engines. `play` warns when the scenario's runs were
+already played against this instance (the watchers remember the run numbers they've handled, and
+ignore them); `reset-scenario` clears that.
 
 TODO: the shipped `expect:` blocks allow a repeated final payload and uploads after it, for the FSM
 loops' end-of-run re-upload -- so against Airflow they also let through a DAG re-firing after the
@@ -946,8 +942,8 @@ above):
 ./airflow_automation/airflow_demo/airflow_demo.sh pause-watch              # stops the watchers
 ```
 
-For a paced, narrated walkthrough instead (including a forced-failure/retry demonstration), use
-`./airflow_automation/airflow_demo/watch_interactive_demo.sh`.
+For a paced walkthrough instead, add `--interactive --monitor` (and play
+`scenario-player/scenarios/total_fault_injection_demo.yaml` to watch crashed jobs retrying).
 
 `tests/airflow-ngt/test_dags_watch.py` covers the design (see "Tests of the library and the simulator" above).
 
