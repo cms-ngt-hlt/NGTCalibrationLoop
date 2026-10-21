@@ -1,0 +1,3 @@
+#!/bin/bash
+# (FAKE) stand-in for scram's `cmsenv` -- no real CMSSW environment to set up here.
+echo "(FAKE) cmsenv: no-op"

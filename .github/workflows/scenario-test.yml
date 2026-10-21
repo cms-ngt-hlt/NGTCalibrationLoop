@@ -1,0 +1,22 @@
+name: scenario-test
+
+on: [push, pull_request]
+
+jobs:
+  scenario-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tmux
+        run: sudo apt-get install -y tmux
+      - name: Create the venv live_demo.sh expects
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements-dev.txt
+      - name: Play the basic EcalPedestals scenario and check its results
+        run: .venv/bin/pytest -m scenario -v

@@ -1,0 +1,22 @@
+# Two runs back to back: a fresh run latched right after the previous one
+# finishes.
+runs:
+  - calibrations: [EcalPedestals, SiStripBad, BeamSpot]
+    run: 700501
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20
+
+  - calibrations: [EcalPedestals, SiStripBad, BeamSpot]
+    run: 700502
+    start_offset: 70
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20

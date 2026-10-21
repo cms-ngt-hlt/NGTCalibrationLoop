@@ -1,0 +1,11 @@
+# Single run, single calibration.
+runs:
+  - calibrations: [EcalPedestals]
+    run: 398600
+    start_offset: 0
+    minutes_ago: 2
+    lumisections:
+      - {ls: 51, after: 0}
+      - {ls: 52, after: 20}
+      - {ls: 53, after: 20}
+    end_after: 30
