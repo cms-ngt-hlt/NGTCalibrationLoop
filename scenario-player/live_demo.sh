@@ -12,15 +12,17 @@
 #
 # $NGT_DEV_HOME (default ./demo-env, i.e. a gitignored directory inside this repo)
 # holds all scratch state -- delete it any time to reset the demo environment.
-#
-# Configuration (overridable via environment variables):
-#   NGT_DEV_HOME              scratch state directory        (default: $REPO_DIR/demo-env)
-#   NGT_LOOP_SLEEP_SECONDS    Step 3/4 poll interval, seconds  (default: 5; production default is 60)
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export NGT_DEV_HOME="${NGT_DEV_HOME:-$REPO_DIR/demo-env}"
+
+# NGT_DEV_HOME, NGT_INSTANCE and ngt_tmux_new_session are defined here (if unset)
+# Note: the disable silences sourcing file from runtime-only path
+# shellcheck disable=SC1091
+source "$REPO_DIR/scenario-player/sim_env.sh"
+# Every session of this checkout starts with it, so two checkouts' loops can run side by side.
+TMUX_PREFIX="NGTDemo_${NGT_INSTANCE}_"
 CALIBRATIONS=(SiStripBad EcalPedestals BeamSpot)
 PLAYER="$REPO_DIR/scenario-player/scenario_player.py"
 
@@ -35,13 +37,18 @@ Setup:
                                           file, output and log. Stop the loops first; \`setup\`
                                           (or \`play\`) recreates it
 
-Running the loops (each in its own tmux session, NGTDemo{2,3,4}_<calibration>):
+Configuration (overridable via environment variables):
+  NGT_DEV_HOME              scratch state directory          (default: $REPO_DIR/demo-env)
+  NGT_INSTANCE              names tmux sessions              (default: see sim_env.sh)
+  NGT_LOOP_SLEEP_SECONDS    Step 3/4 poll interval, seconds  (default: 5; production default is 60)
+
+Running the loops (each in its own tmux session, ${TMUX_PREFIX}{2,3,4}_<calibration>):
   start2 <calibration>                   Launch Step 2 only
   start3 <calibration>                   Launch Step 3 only
   start4 <calibration>                   Launch Step 4 only
   start-all <calibration>                Launch all three
   stop-all <calibration>                 Kill all three tmux sessions for a calibration
-  status                                 List running NGTDemo* tmux sessions
+  status                                 List this checkout's running ${TMUX_PREFIX}* sessions
   logs <calibration> <2|3|4>             Tail -f that step's combined log
 
 Driving a fake run (edits \$NGT_DEV_HOME/oms_runs.json + drops fake RAW files):
@@ -76,14 +83,13 @@ activate_venv() {
     echo "No venv at $REPO_DIR/.venv -- run: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements-dev.txt" >&2
     exit 1
   fi
+  # Note: the disable silences sourcing file from runtime-only path
   # shellcheck disable=SC1091
   source "$REPO_DIR/.venv/bin/activate"
 }
 
 cmd_setup() {
   activate_venv
-  # shellcheck disable=SC1091
-  source "$REPO_DIR/scenario-player/sim_env.sh"
   sim_setup
 
   echo
@@ -95,17 +101,15 @@ cmd_reset() {
   # sim_reset needs no venv (it only removes a directory) -- see sim_env.sh, which owns
   # what "reset" means for the simulator so this verb doesn't have to repeat it.
   local running
-  running="$(cmd_status | grep -c '^NGTDemo' || true)"
+  running="$(cmd_status | grep -c "^$TMUX_PREFIX" || true)"
   if [ "$running" -gt 0 ]; then
-    echo "Note: $running NGTDemo* tmux session(s) are running. Wiping the state under them"
+    echo "Note: $running ${TMUX_PREFIX}* tmux session(s) are running. Wiping the state under them"
     echo "leaves each one latched onto a run number the fresh oms_runs.json won't contain,"
     echo "which crashes it instead of just waiting for a new run -- stop them first with:"
     echo "  $0 stop-all <calibration>"
     echo
   fi
 
-  # shellcheck disable=SC1091
-  source "$REPO_DIR/scenario-player/sim_env.sh"
   sim_reset
 
   echo "Next: $0 setup"
@@ -122,8 +126,8 @@ console_log_path() {
 start_step() {
   local step="$1" calibration="$2"
   require_calibration "$calibration"
-  local session="NGTDemo${step}_${calibration}"
-  if tmux has-session -t "$session" 2>/dev/null; then
+  local session="${TMUX_PREFIX}${step}_${calibration}"
+  if tmux has-session -t "=$session" 2>/dev/null; then
     echo "$session is already running (tmux attach -t $session)"
     return 0
   fi
@@ -135,8 +139,10 @@ start_step() {
   console_log="$(console_log_path "$step" "$calibration")"
   mkdir -p "$(dirname "$console_log")"
   # Plain -c, not -lc: a login shell would re-source the operator's dotfiles,
-  # whose cmsenv/cmsrel functions outrank the fake toolchain in $PATH.
-  tmux new-session -d -s "$session" "bash -c '
+  # whose cmsenv/cmsrel functions outrank the fake toolchain in $PATH. Everything the
+  # loops need comes from env.sh and this command line, so ngt_tmux_new_session (sim_env.sh)
+  # can keep this checkout's settings out of the tmux server's environment.
+  ngt_tmux_new_session -d -s "$session" "bash -c '
     cd \"$REPO_DIR\"
     source \"$REPO_DIR/.venv/bin/activate\"
     source \"$NGT_DEV_HOME/env.sh\"
@@ -156,7 +162,7 @@ cmd_start_all() {
 }
 
 cmd_status() {
-  tmux list-sessions 2>/dev/null | grep '^NGTDemo' || echo "(no NGTDemo* tmux sessions running)"
+  tmux list-sessions 2>/dev/null | grep "^$TMUX_PREFIX" || echo "(no ${TMUX_PREFIX}* tmux sessions running)"
 }
 
 cmd_logs() {
@@ -171,9 +177,9 @@ cmd_stop_all() {
   local calibration="$1"
   require_calibration "$calibration"
   for step in 2 3 4; do
-    local session="NGTDemo${step}_${calibration}"
-    if tmux has-session -t "$session" 2>/dev/null; then
-      tmux kill-session -t "$session"
+    local session="${TMUX_PREFIX}${step}_${calibration}"
+    if tmux has-session -t "=$session" 2>/dev/null; then
+      tmux kill-session -t "=$session"
       echo "Killed $session"
     fi
   done
