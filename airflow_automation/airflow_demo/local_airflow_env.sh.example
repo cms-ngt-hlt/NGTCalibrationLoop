@@ -25,7 +25,7 @@
 # ...or any other database entirely (then creating it is up to you):
 #AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://user:password@host/dbname"
 
-# API server / UI port (default: 8100 + a hash of the checkout's path, i.e. 8100-8899), and
+# API server / UI port (default: 8100 + the instance hash, i.e. 8100-8899), and
 # the scheduler's and triggerer's task-log servers (default: that port + 1000 / + 2000).
 #NGT_AIRFLOW_PORT=8100
 #AIRFLOW__LOGGING__WORKER_LOG_SERVER_PORT=9100

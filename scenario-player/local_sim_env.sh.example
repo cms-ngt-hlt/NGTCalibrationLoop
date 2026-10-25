@@ -9,8 +9,9 @@
 
 # What names every per-checkout resource of every engine adapter (Airflow home, Postgres
 # database, tmux sessions, ports -- see airflow_automation/airflow_demo/airflow_env.sh).
-# Default: this checkout's directory name + a short hash of its full path. Set a short,
-# readable one (lowercase letters, digits, underscores: it ends up in a database name).
+# Default: this checkout's directory name + a short hash of its full path and NGT_DEV_HOME
+# (so setting that below renames it). Set a short, readable one (lowercase letters, digits,
+# underscores: it ends up in a database name).
 #NGT_INSTANCE="mycheckout"
 #NGT_INSTANCE_HASH=1234567        # the number the default ports are derived from
 

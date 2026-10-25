@@ -609,12 +609,14 @@ sudo -u postgres psql -c "CREATE ROLE airflow_ngt WITH LOGIN CREATEDB PASSWORD '
 ```
 
 **Running several checkouts side by side.** Everything that could collide between two clones of
-this repo on one machine defaults to a name derived from the clone's directory
-(`$NGT_INSTANCE`: its basename plus a short hash of its full path): the Airflow home
+this repo on one machine -- or two `$NGT_DEV_HOME`s of one -- defaults to a name derived from the
+clone's directory and `$NGT_DEV_HOME` (`$NGT_INSTANCE`: the clone's basename plus a short hash of
+its full path and `$NGT_DEV_HOME`): the Airflow home
 (`~/airflow3-ngt-<instance>`), the Postgres database (`airflow3_ngt_<instance>`), the API
 server/UI port (8100-8899, from the same hash), the two task-log server ports, the tmux session
-names (`NGTAirflow_<instance>_*`) and `$NGT_DEV_HOME` (`./demo-env`). So two clones need no
-configuration to run isolated; `./airflow_automation/airflow_demo/airflow_demo.sh ui` prints a clone's
+names (`NGTAirflow_<instance>_*`) and `$NGT_DEV_HOME` (`./demo-env`). So two clones, or two
+`$NGT_DEV_HOME`s of one, need no configuration to run isolated -- as long as every command of an
+instance gets the same `$NGT_DEV_HOME`, or it is a different instance; `./airflow_automation/airflow_demo/airflow_demo.sh ui` prints a clone's
 URL. Every one of those values is overridable -- from the environment, or persistently from
 the gitignored `airflow_automation/airflow_demo/local_airflow_env.sh` (Airflow side) and
 `scenario-player/local_sim_env.sh` (simulator side, read by `live_demo.sh` too), which are

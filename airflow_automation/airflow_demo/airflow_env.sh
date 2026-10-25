@@ -1,7 +1,7 @@
 #!/bin/bash
 # Sourced by airflow_demo.sh (and usable standalone) to configure a local
 # Airflow 3.x instance pointed at this repo's airflow_automation/airflow_dags/, backed by a
-# per-checkout database on the local Postgres (LocalExecutor needs row-level
+# per-instance database on the local Postgres (LocalExecutor needs row-level
 # locking, which SQLite doesn't support -- see README.md's Airflow setup
 # section for how the `airflow_ngt` role was created).
 #
@@ -12,11 +12,11 @@
 # $NGT_DEV_HOME/env.sh its sim_setup writes, which airflow_demo.sh's tmux sessions
 # source on top of the values resolved here.
 #
-# Isolation between checkouts: every value below that could collide between two
-# checkouts of this repo on one machine (Airflow home, metadata DB, API-server port,
-# log-server ports, tmux session names) defaults to something derived from
-# $NGT_INSTANCE (sim_env.sh: this checkout's basename + a hash of its path) or
-# $NGT_INSTANCE_HASH, so two checkouts can run side by side with no configuration.
+# Isolation between instances: every value below that could collide between two checkouts
+# of this repo, or two $NGT_DEV_HOMEs of one, on one machine (Airflow home, metadata DB,
+# API-server port, log-server ports, tmux session names) defaults to something derived from
+# $NGT_INSTANCE (sim_env.sh: this checkout's basename + a hash of its path and
+# $NGT_DEV_HOME) or $NGT_INSTANCE_HASH, so they can run side by side with no configuration.
 # Every one of them is overridable -- from the environment, or persistently from the
 # gitignored local_airflow_env.sh next to this file (which beats the environment); see
 # local_airflow_env.sh.example. Either way the value reaches all four Airflow processes:
@@ -47,13 +47,14 @@ export NGT_AIRFLOW_VENV="${NGT_AIRFLOW_VENV:-$HOME/airflow3-ngt-venv}"
 # upgrade is real work Airflow supports, but not something worth doing for a
 # disposable dev/demo instance; a fresh, separately-named one sidesteps a
 # schema mismatch without touching (or needing) whatever was there before.
-# Per checkout, so two checkouts never share an airflow.cfg (and with it the JWT
+# Per instance, so two instances never share an airflow.cfg (and with it the JWT
 # secrets the API server and its workers must agree on) or task logs.
 export AIRFLOW_HOME="${AIRFLOW_HOME:-$HOME/airflow3-ngt-$NGT_INSTANCE}"
 
-# Metadata DB: a per-checkout database owned by the shared `airflow_ngt` role.
+# Metadata DB: a per-instance database owned by the shared `airflow_ngt` role -- it holds the
+# Asset watermarks, which describe the runs under one $NGT_DEV_HOME.
 # `airflow_demo.sh setup` creates it (that role has CREATEDB) and migrates it, so nothing
-# needs doing by hand. Without this, two checkouts would share one DB and fight over its
+# needs doing by hand. Without this, two instances would share one DB and fight over its
 # DAGs, and `reset-airflow` in either would wipe the other's state.
 export NGT_AIRFLOW_DB_HOST="${NGT_AIRFLOW_DB_HOST:-localhost}"
 export NGT_AIRFLOW_DB_PORT="${NGT_AIRFLOW_DB_PORT:-5432}"
@@ -81,8 +82,8 @@ export AIRFLOW__DAG_PROCESSOR__MIN_FILE_PROCESS_INTERVAL="${AIRFLOW__DAG_PROCESS
 # than part of a combined webserver process.
 export AIRFLOW__API__EXPOSE_CONFIG="${AIRFLOW__API__EXPOSE_CONFIG:-True}"
 
-# Ports. The API server/UI gets 8100-8899, picked from the checkout's path hash so two
-# checkouts don't land on the same one; the scheduler's and triggerer's task-log servers
+# Ports. The API server/UI gets 8100-8899, picked from the instance hash so two
+# instances don't land on the same one; the scheduler's and triggerer's task-log servers
 # (Airflow's own defaults, 8793/8794, are the same for every instance) are offset from it.
 # A collision on the hash is possible but unlikely -- override NGT_AIRFLOW_PORT if it happens.
 export NGT_AIRFLOW_PORT="${NGT_AIRFLOW_PORT:-$((8100 + NGT_INSTANCE_HASH % 800))}"
@@ -106,7 +107,7 @@ export AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS="${AIRFLOW__CORE__SIMPLE_AU
 
 # Prefix of the four tmux sessions airflow_demo.sh manages (<prefix>Scheduler, DagProcessor,
 # ApiServer, Triggerer). tmux session names are global to one tmux server, so without a
-# per-checkout prefix a second checkout's `start` would find the first one's sessions
+# per-instance prefix a second instance's `start` would find the first one's sessions
 # already running and silently do nothing.
 export NGT_AIRFLOW_TMUX_PREFIX="${NGT_AIRFLOW_TMUX_PREFIX:-NGTAirflow_${NGT_INSTANCE}_}"
 

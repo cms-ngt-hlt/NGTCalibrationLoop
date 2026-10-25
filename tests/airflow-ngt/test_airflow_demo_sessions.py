@@ -139,3 +139,17 @@ def test_start_leaves_the_tmux_server_without_this_checkouts_settings(demo):
     settings = [p for p in Path(demo.env["AIRFLOW_HOME"]).iterdir() if p.is_file()]
     assert settings
     assert {p.name: stat.S_IMODE(p.stat().st_mode) for p in settings} == {p.name: 0o600 for p in settings}
+
+
+def test_two_dev_homes_of_one_checkout_get_separate_airflow_instances(tmp_path):
+    """Airflow home, database and session prefix follow NGT_INSTANCE, which follows NGT_DEV_HOME."""
+    names = ("AIRFLOW_HOME", "NGT_AIRFLOW_DB_NAME", "NGT_AIRFLOW_TMUX_PREFIX")
+
+    def resolved(home):
+        script = f'source "{AIRFLOW_ENV}" > /dev/null && ' + " && ".join(f'echo "${{{v}}}"' for v in names)
+        env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "NGT_SKIP_LOCAL_ENV": "1", "NGT_DEV_HOME": str(home)}
+        return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True).stdout.split()
+
+    first, second = resolved(tmp_path / "a"), resolved(tmp_path / "b")
+    assert resolved(tmp_path / "a") == first
+    assert all(one != other for one, other in zip(first, second))
