@@ -91,7 +91,26 @@ ENV
   # Makes the fake `omsapi` package importable by whatever Python process is
   # actually running the engine's workers. Harmless no-op for an engine that
   # doesn't need it.
-  pip install -e "$REPO_DIR/tests/stubs" -q
+  _install_omsapi_stub
+}
+
+# _install_omsapi_stub: `pip install -e tests/stubs`, skipped when the active venv already
+# has it from this checkout with the same tests/stubs/pyproject.toml (recorded in a stamp
+# file) -- reinstalling an installed editable package races with a second setup sharing
+# the venv. Edits to omsapi/ itself need no reinstall.
+_install_omsapi_stub() {
+  local stub_dir="$REPO_DIR/tests/stubs"
+  local stamp="$VIRTUAL_ENV/.ngt_omsapi_stub.stamp"
+  (
+    command -v flock >/dev/null 2>&1 && flock 9
+    local want="$stub_dir $(sha256sum "$stub_dir/pyproject.toml" | cut -d' ' -f1)"
+    if [ "$(cat "$stamp" 2>/dev/null)" = "$want" ] \
+        && python -c "import importlib.metadata as m; m.version('ngt-omsapi-stub')" 2>/dev/null; then
+      exit 0
+    fi
+    pip install -e "$stub_dir" -q
+    echo "$want" > "$stamp"
+  ) 9>"$VIRTUAL_ENV/.ngt_omsapi_stub.lock"
 }
 
 # sim_reset: wipe all simulator state -- every fake run/lumisection/EOS file/
