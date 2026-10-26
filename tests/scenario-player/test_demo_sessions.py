@@ -23,17 +23,35 @@ esac
 """
 
 
-def test_stop_all_kills_only_this_instances_sessions(tmp_path):
+def _live_demo_as_instance_a(tmp_path, *args):
+    """Run live_demo.sh as instance `a` against a fake tmux holding sessions of `a` and `b`;
+    returns the sessions left. NGT_DEV_HOME is a scratch directory: `reset` deletes it."""
     (tmp_path / "tmux").write_text(FAKE_TMUX, encoding="utf-8")
     (tmp_path / "tmux").chmod(0o755)
     sessions = tmp_path / "sessions"
-    sessions.write_text("NGTDemo_a_2_EcalPedestals\nNGTDemo_b_2_EcalPedestals\n", encoding="utf-8")
+    sessions.write_text(
+        "NGTDemo_a_2_EcalPedestals\nNGTDemo_a_3_BeamSpot\nNGTDemo_b_2_EcalPedestals\n", encoding="utf-8"
+    )
     env = {k: v for k, v in os.environ.items() if not k.startswith("TMUX")}
-    env.update(PATH=f"{tmp_path}:{env['PATH']}", FAKE_TMUX_SESSIONS=str(sessions), NGT_INSTANCE="a")
+    env.update(PATH=f"{tmp_path}:{env['PATH']}", FAKE_TMUX_SESSIONS=str(sessions), NGT_INSTANCE="a",
+               NGT_DEV_HOME=str(tmp_path / "demo-env"))
+    subprocess.run(["bash", str(LIVE_DEMO), *args], env=env, check=True, capture_output=True)
+    return sessions.read_text(encoding="utf-8").split()
 
-    subprocess.run(["bash", str(LIVE_DEMO), "stop-all", "EcalPedestals"], env=env, check=True)
 
-    assert sessions.read_text(encoding="utf-8").split() == ["NGTDemo_b_2_EcalPedestals"]
+def test_stop_all_kills_only_this_instances_sessions(tmp_path):
+    left = _live_demo_as_instance_a(tmp_path, "stop-all", "EcalPedestals")
+
+    assert left == ["NGTDemo_a_3_BeamSpot", "NGTDemo_b_2_EcalPedestals"]
+
+
+def test_reset_stops_all_of_this_instances_loops_and_only_those(tmp_path):
+    (tmp_path / "demo-env").mkdir()
+
+    left = _live_demo_as_instance_a(tmp_path, "reset")
+
+    assert left == ["NGTDemo_b_2_EcalPedestals"]
+    assert not (tmp_path / "demo-env").exists()
 
 
 def _instance(checkout, dev_home=None):

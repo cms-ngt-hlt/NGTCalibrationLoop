@@ -243,7 +243,7 @@ below for the scenario format and the rest of the flags.
 
 Run `./scenario-player/live_demo.sh` with no arguments for the full command list. All state
 lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
-this repo); `./scenario-player/live_demo.sh reset` deletes it, which resets the demo
+this repo); `./scenario-player/live_demo.sh reset` stops the loops and deletes it, which resets the demo
 environment completely.
 
 You can run the demo manually without a scripted scenario, e.g.:

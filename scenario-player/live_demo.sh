@@ -33,9 +33,9 @@ Usage: $0 <command> [args]
 Setup:
   setup                                  Create/refresh the \$NGT_DEV_HOME scratch environment
                                           (safe to re-run; \$NGT_DEV_HOME default: ./demo-env)
-  reset                                  Delete \$NGT_DEV_HOME entirely -- every fake run, EOS
-                                          file, output and log. Stop the loops first; \`setup\`
-                                          (or \`play\`) recreates it
+  reset                                  Stop this instance's loops, then delete \$NGT_DEV_HOME
+                                          entirely -- every fake run, EOS file, output and log.
+                                          \`setup\` (or \`play\`) recreates it
 
 Configuration (overridable via environment variables):
   NGT_DEV_HOME              scratch state directory          (default: $REPO_DIR/demo-env)
@@ -98,18 +98,13 @@ cmd_setup() {
 }
 
 cmd_reset() {
-  # sim_reset needs no venv (it only removes a directory) -- see sim_env.sh, which owns
-  # what "reset" means for the simulator so this verb doesn't have to repeat it.
-  local running
-  running="$(cmd_status | grep -c "^$TMUX_PREFIX" || true)"
-  if [ "$running" -gt 0 ]; then
-    echo "Note: $running ${TMUX_PREFIX}* tmux session(s) are running. Wiping the state under them"
-    echo "leaves each one latched onto a run number the fresh oms_runs.json won't contain,"
-    echo "which crashes it instead of just waiting for a new run -- stop them first with:"
-    echo "  $0 stop-all <calibration>"
-    echo
-  fi
+  local calibration
+  for calibration in "${CALIBRATIONS[@]}"; do
+    cmd_stop_all "$calibration"
+  done
 
+  # from sim_env.sh
+  # no venv needed
   sim_reset
 
   echo "Next: $0 setup"
