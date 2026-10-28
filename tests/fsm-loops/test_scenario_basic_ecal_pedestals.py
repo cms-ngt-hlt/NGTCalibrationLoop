@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LIVE_DEMO = REPO_ROOT / "scenario-player" / "live_demo.sh"
 SCENARIO = REPO_ROOT / "scenario-player" / "scenarios" / "basic_ecal_pedestals.yaml"
 CALIBRATION = "EcalPedestals"
@@ -47,7 +47,8 @@ def _wait_until(condition, timeout):
 
 @pytest.fixture
 def demo_home(tmp_path):
-    """Scratch $NGT_DEV_HOME, with the demo's tmux sessions torn down afterwards."""
+    """Scratch $NGT_DEV_HOME, with the demo's tmux sessions torn down afterwards. Its sessions
+    are named after it, so they stay apart from a demo of the same checkout that may be running."""
     env = dict(os.environ, NGT_DEV_HOME=str(tmp_path / "demo-env"), NGT_LOOP_SLEEP_SECONDS="2")
 
     def demo(*args):
@@ -55,9 +56,7 @@ def demo_home(tmp_path):
             ["bash", str(LIVE_DEMO), *args], env=env, capture_output=True, text=True, check=False
         )
 
-    assert "(no NGTDemo* tmux sessions" in demo("status").stdout, (
-        "NGTDemo* tmux sessions are already running -- stop them first (live_demo.sh stop-all)"
-    )
+    assert "(no NGTDemo_" in demo("status").stdout, "this test's tmux sessions are already running"
     try:
         yield Path(env["NGT_DEV_HOME"]), demo
     finally:

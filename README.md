@@ -243,7 +243,7 @@ below for the scenario format and the rest of the flags.
 
 Run `./scenario-player/live_demo.sh` with no arguments for the full command list. All state
 lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
-this repo); `./scenario-player/live_demo.sh reset` deletes it, which resets the demo
+this repo); `./scenario-player/live_demo.sh reset` stops the loops and deletes it, which resets the demo
 environment completely.
 
 You can run the demo manually without a scripted scenario, e.g.:
@@ -252,24 +252,30 @@ You can run the demo manually without a scripted scenario, e.g.:
 ./scenario-player/live_demo.sh setup                                  # create ./demo-env scratch env
 ./scenario-player/live_demo.sh start-all EcalPedestals                 # launch all 3 steps in tmux
 ./scenario-player/live_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
-tmux attach -t NGTDemo2_EcalPedestals                       # watch it react (Ctrl-b d to detach)
+tmux attach -t NGTDemo_<instance>_2_EcalPedestals           # watch it react (Ctrl-b d to detach)
 ./scenario-player/live_demo.sh add-ls EcalPedestals 398600 53           # simulate a new lumisection arriving
 ./scenario-player/live_demo.sh end-run 398600                           # simulate the run ending
 ./scenario-player/live_demo.sh status                                   # list running sessions
 ./scenario-player/live_demo.sh stop-all EcalPedestals                   # tear down
 ```
 
-Two settings are overridable via environment variables:
+Three settings are overridable via environment variables:
 
 | Variable                 | Default                              | Meaning                          |
 |---------------------------|--------------------------------------|-----------------------------------|
 | `NGT_DEV_HOME`             | `./demo-env`                         | scratch state directory           |
 | `NGT_LOOP_SLEEP_SECONDS`   | `5` (production default: `60`)       | Step 3/4 poll interval, seconds   |
+| `NGT_INSTANCE`             | checkout dir name + a hash of its path (and of `NGT_DEV_HOME`, if not the default) | names this demo's tmux sessions |
 
 e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./scenario-player/live_demo.sh setup`. `NGT_DEV_HOME` is read
 at `setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup`
 after changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh each time a loop is
 started (`start2` / `start3` / `start4` / `start-all`).
+
+The loops' tmux sessions are named `NGTDemo_<NGT_INSTANCE>_<step>_<calibration>` (`start-all`
+and `status` print them), and `status`, `stop-all` and `reset` only see their own. The default
+`NGT_INSTANCE` follows the checkout and `NGT_DEV_HOME`, so two checkouts -- or two `NGT_DEV_HOME`s
+ of one -- run their demos side by side. Use the same `NGT_DEV_HOME` in every command of one demo.
 
 ## The offline simulator (`scenario-player/`)
 

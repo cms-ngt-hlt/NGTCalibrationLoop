@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_PLAYER_DIR = REPO_ROOT / "scenario-player"
 if str(SCENARIO_PLAYER_DIR) not in sys.path:
     sys.path.insert(0, str(SCENARIO_PLAYER_DIR))

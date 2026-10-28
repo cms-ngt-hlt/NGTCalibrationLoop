@@ -12,8 +12,22 @@ if [[ "$CALIBRATION" != "EcalPedestals" && "$CALIBRATION" != "SiStripBad" && "$C
   exit 1
 fi
 
-tmux new-session -d -s CalibrationLoop2_$CALIBRATION "python3 NGTLoopStep2.py -c $CALIBRATION; bash"
-tmux new-session -d -s CalibrationLoop3_$CALIBRATION "python3 NGTLoopStep3.py -c $CALIBRATION; bash"
-tmux new-session -d -s CalibrationLoop4_$CALIBRATION "python3 NGTLoopStep4.py -c $CALIBRATION; bash"
+FAILED_STEPS=()
 
-echo "Launched CalibrationLoop2/3/4 with -c $CALIBRATION"
+for STEP in 2 3 4; do
+  SESSION="CalibrationLoop${STEP}_$CALIBRATION"
+
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "Session $SESSION already exists; skipping"
+  elif tmux new-session -d -s "$SESSION" "python3 NGTLoopStep${STEP}.py -c $CALIBRATION; bash"; then
+    echo "Launched $SESSION"
+  else
+    echo "Error: failed to launch $SESSION" >&2
+    FAILED_STEPS+=("$STEP")
+  fi
+done
+
+echo "Finished launching tmux sessions for $CALIBRATION calibration"
+if ((${#FAILED_STEPS[@]} > 0)); then
+  echo "Error: There were errors launching following steps: ${FAILED_STEPS[*]}"
+fi
