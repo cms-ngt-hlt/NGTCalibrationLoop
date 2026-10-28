@@ -23,10 +23,13 @@ from pathlib import Path
 
 import yaml
 
+import faults as ngt_faults  # scenario-player/faults.py, a sibling module
+
 REPO_DIR = Path(__file__).resolve().parent.parent
 NGT_DEV_HOME = Path(os.environ.get("NGT_DEV_HOME", str(REPO_DIR / "demo-env")))
 OMS_RUNS_FILE = NGT_DEV_HOME / "oms_runs.json"
 CALIB_YAML_DIR = NGT_DEV_HOME / "calibrationYAML"
+FAULTS_DIR = NGT_DEV_HOME / "faults"
 CALIBRATIONS = ("SiStripBad", "EcalPedestals", "BeamSpot")
 
 
@@ -138,6 +141,27 @@ def end_run(run):
     _save_runs(runs)
 
 
+def _fault_file(target):
+    return FAULTS_DIR / f"{target}.json"
+
+
+def _armed(target):
+    path = _fault_file(target)
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def arm_fault(spec):
+    """Append a FaultSpec to $NGT_DEV_HOME/faults/<target>.json -- a file, since the
+    fakes that consume it run in the loops' processes, not this one."""
+    FAULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _fault_file(spec.target)
+    with ngt_faults.locked_json_file(path):
+        entries = _armed(spec.target)
+        entries.append(ngt_faults.fault_spec_to_entry(spec))
+        ngt_faults.atomic_write_json(path, entries)
+    return entries[-1]
+
+
 def cmd_seed_run(args):
     eos_dir = seed_run(args.calibration, args.run, minutes_ago=args.minutes_ago, ls=args.ls)
     print(f"Seeded live run {args.run} for {args.calibration}")
@@ -170,6 +194,28 @@ def cmd_list_runs(_args):
         print(json.dumps(r))
 
 
+def cmd_arm_fault(args):
+    raw = {key: getattr(args, key) for key in ("target", "mode", "status", "exit_code", "calibration", "run", "step")}
+    raw["times"] = int(args.times) if args.times.isdigit() else args.times
+    try:
+        entry = arm_fault(ngt_faults.parse_fault_spec(raw))
+    except ngt_faults.FaultSpecError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
+    print(f"Armed fault on {args.target}: {json.dumps(entry)}")
+
+
+def cmd_list_faults(args):
+    lines = [f"{t}: {json.dumps(e)}" for t in ([args.target] if args.target else ngt_faults.TARGETS) for e in _armed(t)]
+    print("\n".join(lines) if lines else f"(no faults armed in {FAULTS_DIR})")
+
+
+def cmd_clear_faults(args):
+    for target in [args.target] if args.target else ngt_faults.TARGETS:
+        _fault_file(target).unlink(missing_ok=True)
+    print(f"Cleared fault(s) for {args.target or 'all targets'}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -198,6 +244,27 @@ def main():
     sub.add_parser("list-runs", help="Print all runs currently seeded in the fake OMS").set_defaults(
         func=cmd_list_runs
     )
+
+    p_fault = sub.add_parser(
+        "arm-fault", help="Arm a simulated OMS/cmsRun/upload_conditions.py failure (see faults.py)"
+    )
+    p_fault.add_argument("--target", required=True, choices=ngt_faults.TARGETS)
+    p_fault.add_argument("--mode", required=True, help="e.g. connection_error/timeout/http_error/malformed_json (oms) or exit_code (cmsrun/upload_conditions)")
+    p_fault.add_argument("--status", type=int, help="HTTP status >= 400, required for --mode http_error")
+    p_fault.add_argument("--exit-code", type=int, dest="exit_code", help="nonzero exit code, cmsrun/upload_conditions (default: 1)")
+    p_fault.add_argument("--calibration", choices=CALIBRATIONS, help="optional scope, cmsrun/upload_conditions")
+    p_fault.add_argument("--run", type=int, help="optional further scope")
+    p_fault.add_argument("--step", choices=ngt_faults.STEPS, help="optional, cmsrun only")
+    p_fault.add_argument("--times", default="1", help="positive integer, or 'unlimited' (default: 1)")
+    p_fault.set_defaults(func=cmd_arm_fault)
+
+    p_list_faults = sub.add_parser("list-faults", help="Print all currently-armed faults")
+    p_list_faults.add_argument("--target", choices=ngt_faults.TARGETS, help="limit to one target (default: all)")
+    p_list_faults.set_defaults(func=cmd_list_faults)
+
+    p_clear_faults = sub.add_parser("clear-faults", help="Remove armed fault(s) without resetting run/EOS state")
+    p_clear_faults.add_argument("--target", choices=ngt_faults.TARGETS, help="limit to one target (default: all)")
+    p_clear_faults.set_defaults(func=cmd_clear_faults)
 
     args = parser.parse_args()
     args.func(args)

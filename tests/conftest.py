@@ -27,11 +27,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = Path(__file__).resolve().parent
 STUBS_DIR = TESTS_DIR / "stubs"
+SCENARIO_PLAYER_DIR = REPO_ROOT / "scenario-player"
 
 # Order matters: the stub omsapi must be found before any real one, and the repo
 # root must be importable so `import NGTLoopStep2` etc. works regardless of the
-# directory pytest was invoked from.
-for path in (str(TESTS_DIR), str(STUBS_DIR), str(REPO_ROOT)):
+# directory pytest was invoked from. scenario-player/ supplies the top-level
+# `faults`/`seed`/`scenario_player` modules -- it is not an installed package.
+for path in (str(TESTS_DIR), str(STUBS_DIR), str(SCENARIO_PLAYER_DIR), str(REPO_ROOT)):
     if path not in sys.path:
         sys.path.insert(0, path)
 

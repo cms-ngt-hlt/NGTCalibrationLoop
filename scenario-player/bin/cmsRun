@@ -6,12 +6,26 @@ Reads the `# FAKE_OUTPUTS=...` marker scenario-player/bin/cmsDriver.py wrote int
 python config and creates each listed output file in the current directory, so
 the calling bash script's `if cmsRun ...; then mv/touch ...` success path has
 real files to work with.
+
+A fault armed for this job (faults.consume_armed: $NGT_FAULTS_DIR/cmsrun.json, scoped by the
+working directory) makes it print faults.describe()'s line and exit with the fault's code instead.
 """
+import os
 import re
 import sys
 
+# env.sh puts this checkout's scenario-player/bin on $PATH, so scenario-player/faults.py is always
+# one directory up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+import faults  # noqa: E402
+
 
 def main():
+    fault = faults.consume_armed("cmsrun")
+    if fault:
+        print(faults.describe("cmsrun", fault), file=sys.stderr)
+        sys.exit(fault["exit_code"])
+
     if len(sys.argv) < 2:
         print("(FAKE) cmsRun: expected a python config filename", file=sys.stderr)
         sys.exit(1)

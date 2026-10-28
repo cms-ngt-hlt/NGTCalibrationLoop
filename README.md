@@ -281,11 +281,12 @@ and `status` print them), and `status`, `stop-all` and `reset` only see their ow
 
 `scenario-player/` holds everything needed to simulate a live run without CERN infrastructure:
 `sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and `scenario_player.py`
-(driving/replaying fake runs, with `scenarios/*.yaml`) and `bin/` (the fake
+(driving/replaying fake runs, with `scenarios/*.yaml`), `faults.py` (the shared fault-injection
+vocabulary, see "Fault injection" below) and `bin/` (the fake
 `cmsRun`/`cmsDriver.py`/`edmFileUtil`/`xrdfs`/... toolchain). None of it imports or depends on how
 `NGTLoopStep2/3/4.py` are launched, so it can be pointed at the same `$NGT_DEV_HOME` regardless.
-It is not a Python package (hence the hyphen): `seed.py` and `scenario_player.py` are top-level
-modules found via `sys.path` (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh`).
+It is not a Python package (hence the hyphen): `faults.py`, `seed.py` and `scenario_player.py` are
+top-level modules found via `sys.path` (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh`).
 
 ### Scripting a timed sequence of runs/lumisections
 
@@ -332,6 +333,32 @@ and file *contents* are still yours to look at (`tail` a `stdout.log`, or
 This calls `seed.py`'s functions directly, nothing more -- the same engine-agnostic layer
 `seed.py` itself is.
 
+### Fault injection
+
+OMS (`connection_error`, `timeout`, `http_error` with a status, `malformed_json`), `cmsRun` and
+`uploadConditions.py` (`exit_code`) can be made to fail on purpose; each prints a one-line
+`(FAKE) injected <target> fault: ...` message. The vocabulary is `scenario-player/faults.py`. pytest arms the fake OMS in-process with
+`tests/stubs/omsapi`'s `set_failure()`; a live run arms faults by writing
+`$NGT_DEV_HOME/faults/<target>.json`, which the fakes consume -- from a scenario's top-level
+`faults:` list (see `scenario-player/scenarios/fault_injection_demo.yaml`) or by hand:
+
+```bash
+python3 scenario-player/seed.py arm-fault --target oms --mode connection_error --times 2
+python3 scenario-player/seed.py arm-fault --target cmsrun --mode exit_code --exit-code 139 \
+    --calibration EcalPedestals --step step2
+python3 scenario-player/seed.py list-faults
+python3 scenario-player/seed.py clear-faults
+```
+
+`$NGT_DEV_HOME/env.sh` points the fakes at those files (`NGT_FAULTS_DIR`), so the faults reach the
+FSM loops `live_demo.sh` starts. The FSM scripts never retry or check a job's exit code: a faulted
+`cmsRun` simply loses that job's output, and the lumisections it covered never make it into a
+payload. A failed upload is made good only by a later harvest of the same run -- each one takes
+everything the run has produced so far, the last when the run ends.
+
+Tests: `tests/scenario-player/test_faults.py`, `test_omsapi_faults.py`, `test_fake_job_faults.py`
+and `test_sim_env.py`.
+
 ## Public Presentations
 
 - **Musich, M.** et al. (2025) *Task 3.4: Optimal Calibrations for the CMS High-Level Trigger*. Next Generation Triggers 2nd Technical Workshop, CERN, 21 November 2025. [DOI](https://doi.org/10.17181/gzvw9-t3379).
@@ -339,4 +366,3 @@ This calls `seed.py`'s functions directly, nothing more -- the same engine-agnos
 - **Zarucki, M.** (2026). *Demonstrating the Processing Chain for the Next Generation Triggers in the CMS Experiment*. 28th Conference on Computing in High Energy and Nuclear Physics (CHEP 2026), CMS, CERN. [DOI](https://doi.org/10.17181/txk7r-fsd29).
 
 - **Prendi, J.** (2026). *Conceptual Design and Operation of the Calibration Loop for the Next Generation Triggers in the CMS Experiment*. 28th Conference on Computing in High Energy and Nuclear Physics (CHEP 2026), CERN, 28 May 2026. [DOI](https://doi.org/10.17181/rv6ad-zpy87).
-

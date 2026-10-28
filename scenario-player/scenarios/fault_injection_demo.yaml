@@ -1,0 +1,15 @@
+# One run with faults the FSM loops recover from, each armed just before the work it is aimed at:
+# OMS fails twice and the first upload fails; a later harvest still uploads every lumisection.
+runs:
+  - calibrations: [EcalPedestals]
+    run: 400000
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 20}
+      - {ls: 3, after: 20}
+    end_after: 30
+
+faults:
+  - {target: oms, mode: connection_error, run: 400000, at: 5, times: 2}
+  - {target: upload_conditions, mode: exit_code, exit_code: 1, calibration: EcalPedestals, run: 400000, at: 10}
