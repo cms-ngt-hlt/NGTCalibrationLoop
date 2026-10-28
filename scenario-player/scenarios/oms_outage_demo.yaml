@@ -1,0 +1,24 @@
+# OMS refuses connections (4 queries) from a moment before a run starts, so the queries looking for
+# a new run fail until it answers again; the run must still be found and processed.
+runs:
+  - calibrations: [EcalPedestals]
+    run: 900021
+    start_offset: 1
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 20}
+      - {ls: 3, after: 20}
+    end_after: 30
+
+faults:
+  - {target: oms, mode: connection_error, at: 0, times: 4}
+
+# Starting during the outage makes no difference. Step 4 re-harvests everything each cycle
+# and uploads the final payload again when the run ends.
+expect:
+  settle_timeout: 900
+  quiet_for: 60
+  allow_duplicates: true
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 900021, lumisections: 1-3}

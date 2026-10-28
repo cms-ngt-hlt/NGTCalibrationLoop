@@ -3,8 +3,8 @@ End-to-end "scenario-tests": play scenario-player/scenarios/*.yaml through
 scenario-player/live_demo.sh (real NGTLoopStep2/3/4.py processes in tmux against the fake
 OMS/EOS/CMSSW toolchain) and check what the loops left behind in a scratch $NGT_DEV_HOME.
 
-Slow (about a minute each) and need bash + tmux + the repo-root .venv, so they are deselected from
-the default `pytest` run (see pytest.ini) -- run them with `pytest -m scenario` (CI: scenario-test).
+Slow (a couple of minutes each) and need bash + tmux + the repo-root .venv, so they are deselected
+from the default `pytest` run (see pytest.ini) -- run them with `pytest -m scenario` (CI: scenario-test).
 """
 import os
 import re
@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import fake_conddb  # scenario-player/fake_conddb.py, on sys.path via tests/conftest.py
 import faults
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -80,6 +81,7 @@ def _play(demo_home, scenario):
     spec = yaml.safe_load(scenario.read_text())
     run_dir = home / "data" / CALIBRATION / f"run{spec['runs'][0]['run']}"
 
+    # The player checks the scenario's expect: block once the uploads settle, and exits 1 if it fails.
     played = demo("play", str(scenario), "--speed", str(SPEED))
     assert played.returncode == 0, played.stdout + played.stderr
 
@@ -118,6 +120,13 @@ def test_basic_ecal_pedestals_scenario(demo_home):
 
     # Step 4 harvested at least once...
     assert list(run_dir.glob("harvestJob*/*.db")), "no harvestJob directory contains a .db file"
+
+    # ...and every upload is this run's, the last covering every lumisection (how many come before it
+    # depends on timing).
+    rows = fake_conddb.read_ledger(str(home / "conddb" / fake_conddb.LEDGER_NAME))
+    assert rows, "nothing reached the dummy conditions DB"
+    assert {(row["calibration"], row["run"]) for row in rows} == {(CALIBRATION, run)}
+    assert rows[-1]["lumisections"] == ls_numbers
 
     # ...and nothing along the way wrote an error.
     assert _error_logs(home) == {}

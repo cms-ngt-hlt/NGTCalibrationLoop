@@ -241,6 +241,10 @@ which those are), then passes everything after it straight to `scenario_player.p
 [Scripting a timed sequence of runs/lumisections](#scripting-a-timed-sequence-of-runslumisections)
 below for the scenario format and the rest of the flags.
 
+Every shipped scenario also has an `expect:` block, which `play` checks once the uploads settle
+(see [Validating the result](#validating-the-result-did-the-scenario-actually-pass) below);
+`--no-validate` skips it.
+
 Run `./scenario-player/live_demo.sh` with no arguments for the full command list. All state
 lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
 this repo); `./scenario-player/live_demo.sh reset` stops the loops and deletes it, which resets the demo
@@ -282,10 +286,11 @@ and `status` print them), and `status`, `stop-all` and `reset` only see their ow
 `scenario-player/` holds everything needed to simulate a live run without CERN infrastructure:
 `sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and `scenario_player.py`
 (driving/replaying fake runs, with `scenarios/*.yaml`), `faults.py` (the shared fault-injection
-vocabulary, see "Fault injection" below) and `bin/` (the fake
+vocabulary, see "Fault injection" below), `fake_conddb.py` and `expectations.py` (the dummy
+conditions DB and the `expect:` blocks, see "Validating the result" below) and `bin/` (the fake
 `cmsRun`/`cmsDriver.py`/`edmFileUtil`/`xrdfs`/... toolchain). None of it imports or depends on how
 `NGTLoopStep2/3/4.py` are launched, so it can be pointed at the same `$NGT_DEV_HOME` regardless.
-It is not a Python package (hence the hyphen): `faults.py`, `seed.py` and `scenario_player.py` are
+It is not a Python package (hence the hyphen): its `.py` files are
 top-level modules found via `sys.path` (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh`).
 
 ### Scripting a timed sequence of runs/lumisections
@@ -340,7 +345,8 @@ OMS (`connection_error`, `timeout`, `http_error` with a status, `malformed_json`
 `(FAKE) injected <target> fault: ...` message. The vocabulary is `scenario-player/faults.py`. pytest arms the fake OMS in-process with
 `tests/stubs/omsapi`'s `set_failure()`; a live run arms faults by writing
 `$NGT_DEV_HOME/faults/<target>.json`, which the fakes consume -- from a scenario's top-level
-`faults:` list (see `scenario-player/scenarios/fault_injection_demo.yaml`) or by hand:
+`faults:` list (see `scenario-player/scenarios/fault_injection_demo.yaml`, or
+`oms_outage_demo.yaml`, which takes OMS down just as a run starts) or by hand:
 
 ```bash
 python3 scenario-player/seed.py arm-fault --target oms --mode connection_error --times 2
@@ -358,6 +364,71 @@ everything the run has produced so far, the last when the run ends.
 
 Tests: `tests/scenario-player/test_faults.py`, `test_omsapi_faults.py`, `test_fake_job_faults.py`
 and `test_sim_env.py`.
+
+### Validating the result: did the scenario actually pass?
+
+A scenario can declare what should reach the conditions DB, in a top-level `expect:` block: after
+playback the player waits for the uploads to settle, checks them, and exits nonzero if they don't
+match.
+
+```bash
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml
+echo "exit=$?"    # 0 = expectations held, 1 = they didn't, 2 = the scenario is malformed
+```
+
+For that, the fakes carry identifiers along the real data path. Each fake `cmsRun` output is a
+*provenance manifest* naming the calibration/run/lumisections its inputs carried -- rooted in the
+`run<RUN>_ls<LS>` names of the raw files `seed.py` creates -- and the fake `uploadConditions.py`
+appends what the `.db` it is handed covers to a dummy conditions DB,
+`$NGT_DEV_HOME/conddb/payloads.jsonl` (one JSON object per upload, under `flock`):
+
+```json
+{"seq": 1, "uploaded_at": "2026-10-06T12:34:56Z", "calibration": "EcalPedestals", "run": 398600,
+ "lumisections": [51, 52, 53], "n_input_files": 3, "db_file": "NGTCalibEcalPedestals.db",
+ "job_dir": ".../EcalPedestals/run398600/harvestJob000"}
+```
+
+So a harvest fed the wrong files uploads visibly wrong lumisections. Only the uploads made during
+the play are checked; earlier plays' stay in the ledger until `reset`.
+
+An `expect:` block lists the expected *sequence* of uploads; every upload must be matched by an
+entry or allowed by an `allow_extra` category:
+
+```yaml
+expect:
+  settle_timeout: 600          # cap on waiting for uploads to arrive
+  quiet_for: 45                # settled once no new upload lands for this long
+  allow_extra: {before: true}  # scalar true/false sets all four categories at once
+  payloads:
+    - {calibration: EcalPedestals, run: 398600, lumisections: 51-53}
+```
+
+| Flag | The question it answers | Default |
+| --- | --- | --- |
+| `allow_missing_lumisections` / `allow_extra_lumisections` | does a matched upload carry **the right lumisections**? | both `false` -> exact |
+| `allow_extra.{payloads,before,between,after}` | may the ledger hold **uploads nobody listed**, and where? | `false` |
+| `allow_duplicates` | may two uploads carry an **identical** lumisection set? | `false` |
+| `ordered` | must the listed entries land in the listed **order**? | `false` |
+
+- `lumisections:` accepts `51-53`, `[51, 52, 53]`, `"51-53,57"` or a bare `51`. The flags belong to
+  the whole block: one written inside a `payloads` entry is an error.
+- `payloads: []` with `allow_extra: false` asserts that nothing reached the conditions DB. A failed
+  upload, injected or not, records nothing; an upload covering no lumisections always fails the check.
+- `before` and `after` are separate knobs: Step 4 re-harvests everything available each cycle, so a
+  run climbs through growing payloads before the final one, while one *after* it is suspect. A
+  duplicate is an *identical* lumisection set twice, not just a second upload.
+- The check waits for the uploads to go quiet, not for the expectations to hold -- that is what lets
+  `after: false` catch a late upload. Still arriving at `settle_timeout` means "timed out".
+- The shipped scenarios list each run's final payload and allow the rest:
+  `allow_extra: {before: true, after: true}` and `allow_duplicates: true`, since these loops'
+  Step 4 uploads the final payload again when the run ends.
+
+`--validate-only` checks the whole conditions DB against a scenario's block without playing;
+`--no-validate` plays a scenario ignoring its block; `--dry-run` prints the block with the timeline.
+
+Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_conddb.py` and
+`test_scenario_expectations.py`; `tests/fsm-loops/test_scenarios.py` checks the blocks of
+`basic_ecal_pedestals.yaml` and `fault_injection_demo.yaml` against the real loops.
 
 ## Public Presentations
 

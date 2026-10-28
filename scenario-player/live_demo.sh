@@ -186,7 +186,7 @@ cmd_play() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      -h|--help|--dry-run|--only-list-calibrations)
+      -h|--help|--dry-run|--validate-only|--only-list-calibrations)
         activate_venv
         exec python3 "$PLAYER" "$@"
         ;;
