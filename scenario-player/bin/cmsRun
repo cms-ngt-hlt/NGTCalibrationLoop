@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""
+(FAKE) stand-in for CMSSW's `cmsRun`.
+
+Reads the `# FAKE_OUTPUTS=...` marker scenario-player/bin/cmsDriver.py wrote into the given
+python config and creates each listed output file in the current directory, so
+the calling bash script's `if cmsRun ...; then mv/touch ...` success path has
+real files to work with.
+"""
+import re
+import sys
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("(FAKE) cmsRun: expected a python config filename", file=sys.stderr)
+        sys.exit(1)
+
+    python_filename = sys.argv[1]
+    try:
+        with open(python_filename, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"(FAKE) cmsRun: {python_filename} not found", file=sys.stderr)
+        sys.exit(1)
+
+    match = re.search(r"# FAKE_OUTPUTS=(.*)", content)
+    outputs = [o for o in (match.group(1).split(",") if match else []) if o]
+
+    if not outputs:
+        print(f"(FAKE) cmsRun: no FAKE_OUTPUTS marker in {python_filename}", file=sys.stderr)
+        sys.exit(1)
+
+    for output in outputs:
+        with open(output, "wb") as f:
+            f.write(b"(FAKE) output produced by scenario-player/bin/cmsRun -- not real physics data\n")
+
+    print(f"(FAKE) cmsRun: ran {python_filename}, wrote {outputs}")
+
+
+if __name__ == "__main__":
+    main()

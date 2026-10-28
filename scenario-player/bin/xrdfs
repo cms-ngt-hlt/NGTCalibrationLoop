@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""
+(FAKE) stand-in for `xrdfs <prefix> ls <path>`.
+
+NGTLoopStep2.py invokes this as a single shell string: f"xrdfs {prefix} ls {path}".
+This fake just lists real local files under <path> (a plain directory on this
+machine, standing in for an EOS directory) -- one absolute path per line, the
+same shape the real tool's `ls` output has. A missing directory is reported as
+empty rather than an error, matching how NGTLoopStep2.py already tolerates a
+nonzero/empty xrdfs result (it just logs a warning and moves on).
+"""
+import os
+import sys
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) >= 3 and args[1] == "ls":
+        path = args[2]
+    elif len(args) >= 2 and args[0] == "ls":
+        path = args[1]
+    else:
+        path = args[-1] if args else "."
+
+    if not os.path.isdir(path):
+        return
+
+    for name in sorted(os.listdir(path)):
+        full = os.path.join(path, name)
+        if os.path.isfile(full):
+            print(full)
+
+
+if __name__ == "__main__":
+    main()

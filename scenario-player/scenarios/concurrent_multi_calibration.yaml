@@ -1,0 +1,11 @@
+# One run feeding two calibrations at once.
+runs:
+  - calibrations: [EcalPedestals, SiStripBad]
+    run: 398800
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+      - {ls: 3, after: 15}
+      - {ls: 4, after: 15}
+    end_after: 20

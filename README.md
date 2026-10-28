@@ -185,8 +185,146 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
         └── ...
 ```
 
-## Nota Bene
-There are quite a lot of issues remaining, still. The version we are at right now is the "functioning" version that was used for the demonstrator in the 2025 data taking. However, for 2026 data-taking, we plan to improve and have worked on all the issues. 
+## Running the FSM logic locally / tests
+
+The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
+state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
+via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
+(they default to those same production paths, so deployment behavior is unchanged),
+and each script now guards its argument parsing / main loop behind
+`if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
+launching anything.
+
+To set up a local environment and run the test suite:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests in `tests/` mock every external dependency:
+- OMS REST API -> `tests/stubs/omsapi` (an in-memory fake of the query-builder
+  interface `NGTLoopStep2.py` uses; the real `oms-api-client` isn't installed for
+  tests, only for production deploys per the instructions above)
+- `edmFileUtil` / `xrdfs` (EOS access) -> `tests/support/fake_subprocess.FakeEOS`
+- `cmsDriver.py` / `cmsRun` / `uploadConditions.py` -> never actually invoked;
+  `subprocess.Popen` is replaced with a recorder, so "launching a job" just records
+  what would have run
+- filesystem paths -> redirected into a pytest `tmp_path` via the
+  `NGT_PARAMETERS_PATH` / `NGT_CALIBRATION_YAML_DIR` env vars each script reads
+
+No network access, CMSSW, or CERN-internal hosts are required to run the suite.
+
+## Running a live demo of the loops (no CERN infra needed)
+
+For watching the actual FSM processes run -- not just pytest -- `scenario-player/live_demo.sh`
+launches real `NGTLoopStep2/3/4.py` processes (one per tmux session) against a fake
+OMS/EOS/CMSSW toolchain in `scenario-player/bin/` (fake `cmsDriver.py`, `cmsRun`, `edmFileUtil`,
+`xrdfs`, `cmsrel`, `cmsenv`, `uploadConditions.py`). Everything runs for real --
+real state transitions, real generated job scripts, dummy output files flowing from
+Step 2 through Step 3 to a fake Step 4 upload -- entirely offline.
+
+Quick start example:
+```bash
+./scenario-player/live_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor
+./scenario-player/live_demo.sh stop-all EcalPedestals
+```
+
+`--interactive`
+waits for Enter before each step (printing the command it is about to run), and
+`--monitor` reports every file the loops produce as it appears.
+
+That one command is enough from a cold start (after creating a venv and installing requirements as shown above): `play` sources the .venv, creates `$NGT_DEV_HOME` if it isn't
+there and launches Step 2/3/4 for the calibrations that scenario feeds (asking the scenario player
+which those are), then passes everything after it straight to `scenario_player.py` -- see
+[Scripting a timed sequence of runs/lumisections](#scripting-a-timed-sequence-of-runslumisections)
+below for the scenario format and the rest of the flags.
+
+Run `./scenario-player/live_demo.sh` with no arguments for the full command list. All state
+lives under `$NGT_DEV_HOME` (default `./demo-env`, a gitignored directory inside
+this repo); `./scenario-player/live_demo.sh reset` deletes it, which resets the demo
+environment completely.
+
+You can run the demo manually without a scripted scenario, e.g.:
+
+```bash
+./scenario-player/live_demo.sh setup                                  # create ./demo-env scratch env
+./scenario-player/live_demo.sh start-all EcalPedestals                 # launch all 3 steps in tmux
+./scenario-player/live_demo.sh seed-run EcalPedestals 398600 --ls 51 52  # latch a fake live run
+tmux attach -t NGTDemo2_EcalPedestals                       # watch it react (Ctrl-b d to detach)
+./scenario-player/live_demo.sh add-ls EcalPedestals 398600 53           # simulate a new lumisection arriving
+./scenario-player/live_demo.sh end-run 398600                           # simulate the run ending
+./scenario-player/live_demo.sh status                                   # list running sessions
+./scenario-player/live_demo.sh stop-all EcalPedestals                   # tear down
+```
+
+Two settings are overridable via environment variables:
+
+| Variable                 | Default                              | Meaning                          |
+|---------------------------|--------------------------------------|-----------------------------------|
+| `NGT_DEV_HOME`             | `./demo-env`                         | scratch state directory           |
+| `NGT_LOOP_SLEEP_SECONDS`   | `5` (production default: `60`)       | Step 3/4 poll interval, seconds   |
+
+e.g. `NGT_DEV_HOME=/tmp/ngt-demo ./scenario-player/live_demo.sh setup`. `NGT_DEV_HOME` is read
+at `setup` time and baked into `$NGT_DEV_HOME/ngtParameters.jsn`, so re-run `setup`
+after changing it. `NGT_LOOP_SLEEP_SECONDS` is read fresh each time a loop is
+started (`start2` / `start3` / `start4` / `start-all`).
+
+## The offline simulator (`scenario-player/`)
+
+`scenario-player/` holds everything needed to simulate a live run without CERN infrastructure:
+`sim_env.sh` (scratch environment + fake toolchain bootstrap), `seed.py` and `scenario_player.py`
+(driving/replaying fake runs, with `scenarios/*.yaml`) and `bin/` (the fake
+`cmsRun`/`cmsDriver.py`/`edmFileUtil`/`xrdfs`/... toolchain). None of it imports or depends on how
+`NGTLoopStep2/3/4.py` are launched, so it can be pointed at the same `$NGT_DEV_HOME` regardless.
+It is not a Python package (hence the hyphen): `seed.py` and `scenario_player.py` are top-level
+modules found via `sys.path` (`tests/conftest.py`, and `PYTHONPATH` from `sim_env.sh`).
+
+### Scripting a timed sequence of runs/lumisections
+
+`scenario-player/scenario_player.py` plays
+back a whole timeline from a declarative YAML file, e.g.:
+
+```yaml
+runs:
+  - calibrations: [EcalPedestals, SiStripBad]
+    run: 398800
+    start_offset: 0
+    lumisections:
+      - {ls: 1, after: 0}
+      - {ls: 2, after: 15}
+    end_after: 20
+```    
+
+A scenario lists one or more runs with a start offset and a sequence of lumisections separated
+by delays; events from multiple runs merge into one global timeline. Runs may not overlap (only
+one CMS-wide DAQ run is active at once), but a run's `calibrations` list can share its
+lumisections across several calibrations at once -- see `scenario-player/scenario_player.py`'s
+module docstring for the full format and `scenario-player/scenarios/*.yaml` for worked examples.
+Run numbers must be exactly six digits: the fake `edmFileUtil` parses `run<RUN6DIGIT>_ls<LS>`
+names and skips anything else.
+
+Example executions:
+
+```bash
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml            # real-time
+python3 scenario-player/scenario_player.py scenario-player/scenarios/concurrent_multi_calibration.yaml --speed 5
+python3 scenario-player/scenario_player.py scenario-player/scenarios/basic_ecal_pedestals.yaml --interactive --monitor
+```
+
+`./scenario-player/live_demo.sh play <scenario.yaml> [options]` is the same thing with the
+venv activated, the scratch environment set up and the scenario's loops started for you --
+every argument after `play` is passed straight through.
+
+The player itself starts no loops -- `./scenario-player/live_demo.sh play` does that for you,
+and `setup` / `start-all <calibration>` are still there to drive by hand. `--monitor` reports
+*new* paths only, so a `demo-env` left over from an earlier scenario won't flood the output,
+and file *contents* are still yours to look at (`tail` a `stdout.log`, or
+`./scenario-player/live_demo.sh logs <calibration> 2`).
+
+This calls `seed.py`'s functions directly, nothing more -- the same engine-agnostic layer
+`seed.py` itself is.
 
 ## Public Presentations
 
