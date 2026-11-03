@@ -21,6 +21,12 @@ import fake_conddb  # noqa: E402
 import scenario_player  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def scratch_dev_home(tmp_path, monkeypatch):
+    """main() reads the ledger under $NGT_DEV_HOME."""
+    monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
+
+
 def _record_seed_calls(monkeypatch):
     """Replace scenario-player/seed.py's three entry points with recorders; returns the
     list they append to, so a test can assert purely on what would have been called."""
@@ -424,8 +430,6 @@ def test_main_reports_a_malformed_scenario_with_exit_2(monkeypatch, capsys, tmp_
 
 @pytest.mark.skipif(os.name != "posix", reason="the ledger writer uses fcntl.flock")
 def test_main_checks_only_the_uploads_made_during_this_play(monkeypatch, tmp_path):
-    monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
-    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
     fake_conddb.append_payload({"calibration": "EcalPedestals", "run": 1, "lumisections": [1]})  # an earlier play's
     _record_seed_calls(monkeypatch)
     monkeypatch.setattr(scenario_player.time, "sleep", lambda seconds: None)
@@ -439,6 +443,17 @@ def test_main_checks_only_the_uploads_made_during_this_play(monkeypatch, tmp_pat
     monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario)])
 
     assert scenario_player.main() == scenario_player.EXIT_OK
+
+
+def test_main_without_ngt_dev_home_looks_for_the_ledger_where_seed_py_keeps_its_state(monkeypatch, tmp_path):
+    monkeypatch.delenv("NGT_DEV_HOME")
+    monkeypatch.setattr(scenario_player.seed, "NGT_DEV_HOME", tmp_path / "seed-default")
+    scenario = _write_scenario(tmp_path, {"runs": [{"calibrations": ["EcalPedestals"], "run": 1, "lumisections": [{"ls": 1}]}]})
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario), "--dry-run"])
+
+    scenario_player.main()
+
+    assert fake_conddb.ledger_path().startswith(str(tmp_path / "seed-default"))
 
 
 def _monitor(tmp_path, **kwargs):

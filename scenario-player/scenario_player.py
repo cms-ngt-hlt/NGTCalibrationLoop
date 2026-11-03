@@ -455,6 +455,9 @@ def check_expectations(expectations, name, log=_emit, skip=0):
 def main():
     args = parse_args()
 
+    # fake_conddb finds the ledger through $NGT_DEV_HOME: by default, where seed.py keeps its state.
+    os.environ.setdefault("NGT_DEV_HOME", str(seed.NGT_DEV_HOME))
+
     speed = 1.0 if args.speed is None else args.speed
     scenario = _load_scenario(args.scenario)
 
