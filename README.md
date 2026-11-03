@@ -422,7 +422,6 @@ expect:
   `allow_extra: {before: true, after: true}` and `allow_duplicates: true`, since these loops'
   Step 4 uploads the final payload again when the run ends.
 
-`--validate-only` checks the whole conditions DB against a scenario's block without playing;
 `--no-validate` plays a scenario ignoring its block; `--dry-run` prints the block with the timeline.
 
 Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_conddb.py` and
