@@ -409,8 +409,8 @@ expect:
 | `allow_duplicates` | may two uploads carry an **identical** lumisection set? | `false` |
 | `ordered` | must the listed entries land in the listed **order**? | `false` |
 
-- `lumisections:` accepts `51-53`, `[51, 52, 53]`, `"51-53,57"` or a bare `51`. The flags belong to
-  the whole block: one written inside a `payloads` entry is an error.
+- `lumisections:` is a range, `51-53`, or a list, `[51, 53]`. The flags belong to the whole block:
+  one written inside a `payloads` entry is an error.
 - `payloads: []` with `allow_extra: false` asserts that nothing reached the conditions DB. A failed
   upload, injected or not, records nothing; an upload covering no lumisections always fails the check.
 - `before` and `after` are separate knobs: Step 4 re-harvests everything available each cycle, so a
