@@ -96,11 +96,6 @@ def parse_args():
              "validating a scenario file or wiring it into a non-interactive test)",
     )
     parser.add_argument(
-        "--validate-only",
-        action="store_true",
-        help="skip playback and check the whole conditions DB against the scenario's expect: block",
-    )
-    parser.add_argument(
         "--no-validate", action="store_true", help="play the scenario but ignore its expect: block"
     )
     parser.add_argument(
@@ -144,13 +139,6 @@ def parse_args():
             )
         if args.speed is not None and args.speed <= 0:
             parser.error(f"--speed must be positive, got {args.speed}")
-        if args.validate_only and args.no_validate:
-            parser.error("--validate-only and --no-validate are mutually exclusive")
-        if args.validate_only and (args.interactive or args.dry_run or args.monitor or args.speed is not None):
-            parser.error(
-                "--validate-only plays nothing: --interactive, --dry-run, --monitor and --speed have no "
-                "meaning with it"
-            )
     return args
 
 
@@ -436,7 +424,7 @@ class DataDirMonitor:
         self.poll()
 
 
-def check_expectations(expectations, name, log=_emit, skip=0):
+def check_expectations(expectations, name, skip, log=_emit):
     """Settle-wait, evaluate the ledger's rows after the first `skip`, print the report.
     Returns an exit code."""
     settled, rows = ngt_expectations.wait_for_settle(expectations, log=log, skip=skip)
@@ -484,12 +472,6 @@ def main():
         for calibration in sorted({e.calibration for e in events if e.kind != "fault"}):
             _emit(calibration)
         return None
-
-    if args.validate_only:
-        if expectations is None:
-            print(f"{args.scenario}: --validate-only needs an expect: block", file=sys.stderr)
-            return EXIT_BAD_SCENARIO
-        return check_expectations(expectations, name=str(args.scenario))
 
     if not events:
         _emit("(scenario has no runs -- nothing to play)")

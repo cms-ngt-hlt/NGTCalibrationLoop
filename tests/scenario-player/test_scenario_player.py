@@ -321,9 +321,6 @@ def test_timed_playback_sleeps_and_never_prompts(monkeypatch):
         (["--interactive", "--speed", "5"], "--speed has no meaning"),
         (["--speed", "0"], "must be positive"),
         (["--monitor", "--dry-run"], "--monitor has no meaning"),
-        (["--validate-only", "--no-validate"], "mutually exclusive"),
-        (["--validate-only", "--interactive"], "--validate-only plays nothing"),
-        (["--validate-only", "--speed", "2"], "--validate-only plays nothing"),
     ],
 )
 def test_main_rejects_contradictory_flag_combinations(monkeypatch, capsys, flags, expected_error):
@@ -384,7 +381,6 @@ def test_only_list_calibrations_prints_nothing_for_a_scenario_with_no_runs(monke
         ["--interactive", "--speed", "5"],
         ["--monitor", "--dry-run"],
         ["--speed", "0"],
-        ["--validate-only", "--no-validate"],
     ],
 )
 def test_only_list_calibrations_ignores_every_other_flag(monkeypatch, capsys, tmp_path, ignored_flags):
