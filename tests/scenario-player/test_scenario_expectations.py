@@ -9,6 +9,12 @@ import expectations as ngt_expectations  # scenario-player/expectations.py, via 
 CAL = "EcalPedestals"
 
 
+@pytest.fixture(autouse=True)
+def scratch_dev_home(tmp_path, monkeypatch):
+    """The settle wait and the report name the ledger, which lives under $NGT_DEV_HOME."""
+    monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
+
+
 def row(seq, lumisections, calibration=CAL, run=398600):
     return {"seq": seq, "calibration": calibration, "run": run, "lumisections": sorted(lumisections)}
 
