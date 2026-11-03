@@ -27,7 +27,6 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="the fakes run via th
 def chain(tmp_path, monkeypatch):
     """A $NGT_DEV_HOME with one run's step2 working dir."""
     monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
-    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
     monkeypatch.delenv("NGT_FAULTS_DIR", raising=False)
     run_dir = tmp_path / "data" / "EcalPedestals" / "run398600"
     run_dir.mkdir(parents=True)

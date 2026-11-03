@@ -17,7 +17,6 @@ posix_only = pytest.mark.skipif(os.name != "posix", reason="the ledger writer us
 @pytest.fixture
 def ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path))
-    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
     return tmp_path / fake_conddb.CONDDB_DIR_NAME / fake_conddb.LEDGER_NAME
 
 
@@ -129,19 +128,3 @@ def test_read_ledger_skips_a_torn_trailing_line(ledger):
         f.write('{"seq": 2, "calibration": "Ecal')
 
     assert [row["seq"] for row in fake_conddb.read_ledger()] == [1]
-
-
-def test_ngt_conddb_dir_overrides_ngt_dev_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("NGT_DEV_HOME", str(tmp_path / "devhome"))
-    monkeypatch.setenv("NGT_CONDDB_DIR", str(tmp_path / "elsewhere"))
-    assert fake_conddb.ledger_path() == str(tmp_path / "elsewhere" / fake_conddb.LEDGER_NAME)
-
-
-def test_unset_ngt_dev_home_resolves_to_the_same_place_seed_py_uses(monkeypatch):
-    """The player seeds runs through seed.py and reads the ledger through fake_conddb."""
-    import seed  # scenario-player/seed.py
-
-    monkeypatch.delenv("NGT_DEV_HOME", raising=False)
-    monkeypatch.delenv("NGT_CONDDB_DIR", raising=False)
-
-    assert fake_conddb.ledger_path() == str(seed.NGT_DEV_HOME / fake_conddb.CONDDB_DIR_NAME / fake_conddb.LEDGER_NAME)

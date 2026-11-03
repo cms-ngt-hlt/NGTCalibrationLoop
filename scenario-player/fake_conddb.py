@@ -23,11 +23,6 @@ PROVENANCE_MAGIC = "(FAKE-NGT-PROVENANCE-v1)"
 RAW_LS_RE = re.compile(r"run(\d+)_ls(\d+)")
 CONDDB_DIR_NAME = "conddb"
 LEDGER_NAME = "payloads.jsonl"
-# The ledger's home when NGT_DEV_HOME isn't exported, seed.py's default too: the player seeds runs
-# through seed.py and reads the ledger through here.
-DEFAULT_DEV_HOME = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "demo-env"
-)
 
 
 def utc_now():
@@ -94,14 +89,8 @@ def merge_input_lumisections(paths):
     return set().union(*(lumisections_of_input(path) for path in paths))
 
 
-def conddb_dir():
-    return os.environ.get("NGT_CONDDB_DIR") or os.path.join(
-        os.environ.get("NGT_DEV_HOME") or DEFAULT_DEV_HOME, CONDDB_DIR_NAME
-    )
-
-
 def ledger_path():
-    return os.path.join(conddb_dir(), LEDGER_NAME)
+    return os.path.join(os.environ["NGT_DEV_HOME"], CONDDB_DIR_NAME, LEDGER_NAME)
 
 
 def read_ledger(path=None):
