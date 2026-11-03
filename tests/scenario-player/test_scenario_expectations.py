@@ -33,23 +33,22 @@ def one(lumisections, **extra):
 @pytest.mark.parametrize(
     "spec,expected",
     [
-        (51, {51}),
-        ("51", {51}),
         ("51-53", {51, 52, 53}),
-        ("51-53,57", {51, 52, 53, 57}),
-        ("51 - 53", {51, 52, 53}),
-        ([51, 52, 53], {51, 52, 53}),
-        ([51, "60-62"], {51, 60, 61, 62}),
         ("70-70", {70}),
+        ([51, 53], {51, 53}),
+        ([51], {51}),
     ],
 )
 def test_parse_ls_spec_accepts_every_documented_spelling(spec, expected):
     assert ngt_expectations.parse_ls_spec(spec) == expected
 
 
-@pytest.mark.parametrize("spec", [None, "", "abc", "53-51", "51-", "-51", True, 1.5, {}])
-def test_parse_ls_spec_rejects_nonsense(spec):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    "spec",
+    [None, "", "abc", "53-51", "51-", "-51", "0-3", "51", "51-53,57", 51, True, 1.5, {}, [], [0], [True], [51, "60-62"]],
+)
+def test_parse_ls_spec_rejects_anything_else(spec):
+    with pytest.raises(ValueError, match="a list of LS numbers or a range"):
         ngt_expectations.parse_ls_spec(spec)
 
 
@@ -59,11 +58,6 @@ def test_parse_ls_spec_rejects_nonsense(spec):
 )
 def test_format_ls_set_collapses_consecutive_runs(lumisections, expected):
     assert ngt_expectations.format_ls_set(lumisections) == expected
-
-
-def test_format_ls_set_round_trips_through_parse_ls_spec():
-    original = {51, 52, 53, 57, 58, 90}
-    assert ngt_expectations.parse_ls_spec(ngt_expectations.format_ls_set(original)) == original
 
 
 # --- parsing -------------------------------------------------------------------
@@ -81,7 +75,7 @@ def test_parse_minimal_block_applies_documented_defaults():
 
 
 def test_parse_scalar_allow_extra_sets_every_category():
-    parsed = ngt_expectations.parse_expectations({"allow_extra": True, "payloads": [one(51)]})
+    parsed = ngt_expectations.parse_expectations({"allow_extra": True, "payloads": [one([51])]})
 
     assert (parsed.extra_payloads, parsed.extra_before, parsed.extra_between, parsed.extra_after) == (True,) * 4
 
@@ -94,20 +88,20 @@ def test_parse_requires_payloads_and_says_how_to_mean_nothing():
 @pytest.mark.parametrize("flag", ["allow_duplicates", "allow_extra", "ordered", "quiet_for"])
 def test_parse_points_a_misplaced_block_level_flag_back_up_a_level(flag):
     with pytest.raises(ngt_expectations.ExpectationError, match="move them up a level"):
-        ngt_expectations.parse_expectations({"payloads": [one(51, **{flag: True})]})
+        ngt_expectations.parse_expectations({"payloads": [one([51], **{flag: True})]})
 
 
 @pytest.mark.parametrize(
     "block",
     [
-        {"payloads": [one(51)], "nonsense": 1},
-        {"payloads": [{"run": 398600, "lumisections": 51}]},
-        {"payloads": [{"calibration": CAL, "lumisections": 51}]},
-        {"payloads": [{"calibration": CAL, "run": "abc", "lumisections": 51}]},
-        {"payloads": [one(51, bogus=True)]},
-        {"payloads": [one(51)], "ordered": "yes"},
-        {"payloads": [one(51)], "settle_timeout": 0},
-        {"payloads": [one(51)], "allow_extra": {"sideways": True}},
+        {"payloads": [one([51])], "nonsense": 1},
+        {"payloads": [{"run": 398600, "lumisections": [51]}]},
+        {"payloads": [{"calibration": CAL, "lumisections": [51]}]},
+        {"payloads": [{"calibration": CAL, "run": "abc", "lumisections": [51]}]},
+        {"payloads": [one([51], bogus=True)]},
+        {"payloads": [one([51])], "ordered": "yes"},
+        {"payloads": [one([51])], "settle_timeout": 0},
+        {"payloads": [one([51])], "allow_extra": {"sideways": True}},
         {"payloads": "not a list"},
         {"payloads": [one(None)]},
     ],
@@ -127,7 +121,7 @@ def test_exact_single_payload_passes():
 
 def test_full_sequence_of_growing_reharvests_passes_when_all_listed():
     verdict = check(
-        {"payloads": [one(51), one("51-52"), one("51-53")]},
+        {"payloads": [one([51]), one("51-52"), one("51-53")]},
         [row(1, [51]), row(2, [51, 52]), row(3, [51, 52, 53])],
     )
     assert verdict.ok, verdict.problems
@@ -259,7 +253,7 @@ def test_each_extra_category_is_named_in_the_report(rows, category):
 
 def test_between_is_distinct_from_before_and_after():
     rows = [row(1, [51]), row(2, [51, 52]), row(3, [51, 52, 53])]
-    block = {"allow_extra": {"before": True, "after": True}, "payloads": [one(51), one("51-53")]}
+    block = {"allow_extra": {"before": True, "after": True}, "payloads": [one([51]), one("51-53")]}
 
     verdict = check(block, rows)
     assert not verdict.ok
@@ -296,8 +290,8 @@ def test_ordered_accepts_the_listed_order_across_calibrations():
     block = {
         "ordered": True,
         "payloads": [
-            {"calibration": "EcalPedestals", "run": 398600, "lumisections": 51},
-            {"calibration": "BeamSpot", "run": 398600, "lumisections": 51},
+            {"calibration": "EcalPedestals", "run": 398600, "lumisections": [51]},
+            {"calibration": "BeamSpot", "run": 398600, "lumisections": [51]},
         ],
     }
     assert check(block, rows).ok
@@ -308,8 +302,8 @@ def test_ordered_rejects_the_reverse_order():
     block = {
         "ordered": True,
         "payloads": [
-            {"calibration": "EcalPedestals", "run": 398600, "lumisections": 51},
-            {"calibration": "BeamSpot", "run": 398600, "lumisections": 51},
+            {"calibration": "EcalPedestals", "run": 398600, "lumisections": [51]},
+            {"calibration": "BeamSpot", "run": 398600, "lumisections": [51]},
         ],
     }
     verdict = check(block, rows)
@@ -321,15 +315,15 @@ def test_unordered_is_the_default_so_concurrent_calibrations_do_not_flake():
     rows = [row(1, [51], calibration="BeamSpot"), row(2, [51], calibration="EcalPedestals")]
     block = {
         "payloads": [
-            {"calibration": "EcalPedestals", "run": 398600, "lumisections": 51},
-            {"calibration": "BeamSpot", "run": 398600, "lumisections": 51},
+            {"calibration": "EcalPedestals", "run": 398600, "lumisections": [51]},
+            {"calibration": "BeamSpot", "run": 398600, "lumisections": [51]},
         ]
     }
     assert check(block, rows).ok
 
 
 def test_order_within_one_key_is_enforced_regardless_of_the_ordered_flag():
-    verdict = check({"payloads": [one(51), one("51-52")]}, [row(1, [51, 52]), row(2, [51])])
+    verdict = check({"payloads": [one([51]), one("51-52")]}, [row(1, [51, 52]), row(2, [51])])
     assert not verdict.ok
 
 

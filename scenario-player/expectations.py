@@ -20,6 +20,7 @@
 allowed by `allow_extra`. The flags apply to the whole block; README.md's "Validating the result"
 says why each exists.
 """
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
@@ -74,50 +75,19 @@ def _require_positive_number(value, name):
     return float(value)
 
 
-def _positive_ls(value):
-    # LS numbering starts at 1; a stray leading '-' would otherwise parse and never match.
-    if value < 1:
-        raise ValueError(f"lumisections: {value} is not a valid lumisection number (they start at 1)")
-    return value
-
-
 def parse_ls_spec(spec):
-    """A `lumisections:` value -> a set of ints: `51`, `"51-53"`, `"51-53,57"`, or a list of
-    numbers and ranges (`[51, "60-62"]`). Ranges are inclusive, as everywhere in CMS."""
-    if spec is None:
-        raise ValueError("lumisections: missing (expected e.g. 51, '51-53' or [51, 52, 53])")
-    if isinstance(spec, bool):
-        raise ValueError(f"lumisections: expected numbers or ranges, got {spec!r}")
-    if isinstance(spec, int):
-        return {_positive_ls(spec)}
-    if isinstance(spec, (list, tuple, set)):
-        return set().union(*(parse_ls_spec(item) for item in spec))
-    if not isinstance(spec, str):
-        raise ValueError(f"lumisections: expected a number, range string or list, got {spec!r}")
+    """A `lumisections:` value -> a set of ints: a list of numbers (`[51, 53]`) or one inclusive
+    range (`51-53`). LS numbering starts at 1."""
+    lumisections = set()
+    if isinstance(spec, str) and re.fullmatch(r"\d+-\d+", spec):
+        first, last = map(int, spec.split("-"))
+        lumisections = set(range(first, last + 1))
+    elif isinstance(spec, list) and all(isinstance(ls, int) and not isinstance(ls, bool) for ls in spec):
+        lumisections = set(spec)
 
-    merged = set()
-    for part in spec.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part.lstrip("-"):
-            low_raw, _, high_raw = part.partition("-")
-            try:
-                low, high = int(low_raw), int(high_raw)
-            except ValueError:
-                raise ValueError(f"lumisections: {part!r} is not a valid range (expected e.g. '51-53')")
-            if high < low:
-                raise ValueError(f"lumisections: range {part!r} ends before it starts")
-            merged.update(range(_positive_ls(low), _positive_ls(high) + 1))
-        else:
-            try:
-                value = int(part)
-            except ValueError:
-                raise ValueError(f"lumisections: {part!r} is not a lumisection number")
-            merged.add(_positive_ls(value))
-    if not merged:
-        raise ValueError(f"lumisections: {spec!r} describes no lumisections")
-    return merged
+    if not lumisections or min(lumisections) < 1:
+        raise ValueError(f"lumisections: expected a list of LS numbers or a range like 51-53, got {spec!r}")
+    return lumisections
 
 
 def format_ls_set(lumisections):
