@@ -91,20 +91,11 @@ def parse_ls_spec(spec):
 
 
 def format_ls_set(lumisections):
-    """{51, 52, 53, 57} -> "51-53,57": parse_ls_spec's inverse, for reports."""
-    remaining = sorted(set(lumisections))
-    if not remaining:
-        return "(none)"
-    groups = []
-    start = previous = remaining[0]
-    for value in remaining[1:]:
-        if value == previous + 1:
-            previous = value
-            continue
-        groups.append((start, previous))
-        start = previous = value
-    groups.append((start, previous))
-    return ",".join(str(low) if low == high else f"{low}-{high}" for low, high in groups)
+    """For reports: "51-53" for a complete range, else the list, "[51, 53]"."""
+    ordered = sorted(lumisections)
+    if len(ordered) > 1 and ordered[-1] - ordered[0] == len(ordered) - 1:
+        return f"{ordered[0]}-{ordered[-1]}"
+    return str(ordered)
 
 
 @dataclass(frozen=True)

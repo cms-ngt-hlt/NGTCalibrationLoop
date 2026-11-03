@@ -54,9 +54,9 @@ def test_parse_ls_spec_rejects_anything_else(spec):
 
 @pytest.mark.parametrize(
     "lumisections,expected",
-    [({51, 52, 53}, "51-53"), ({51, 52, 53, 57}, "51-53,57"), ({51}, "51"), (set(), "(none)"), ({51, 53}, "51,53")],
+    [({51, 52, 53}, "51-53"), ({51, 52, 53, 57}, "[51, 52, 53, 57]"), ({51}, "[51]"), (set(), "[]"), ({51, 53}, "[51, 53]")],
 )
-def test_format_ls_set_collapses_consecutive_runs(lumisections, expected):
+def test_format_ls_set_is_a_range_only_when_complete(lumisections, expected):
     assert ngt_expectations.format_ls_set(lumisections) == expected
 
 
@@ -151,13 +151,13 @@ def test_empty_payloads_expects_an_empty_conditions_db():
 def test_missing_lumisection_fails_and_names_it():
     verdict = check({"payloads": [one("51-54")]}, [row(1, [51, 52, 53])])
     assert not verdict.ok
-    assert any("missing LS 54" in problem for problem in verdict.problems)
+    assert any("missing LS [54]" in problem for problem in verdict.problems)
 
 
 def test_extra_lumisection_fails_and_names_it():
     verdict = check({"payloads": [one("51-53")]}, [row(1, [51, 52, 53, 54])])
     assert not verdict.ok
-    assert any("unexpected LS 54" in problem for problem in verdict.problems)
+    assert any("unexpected LS [54]" in problem for problem in verdict.problems)
 
 
 def test_allow_missing_lumisections_accepts_a_short_payload():
@@ -337,7 +337,7 @@ def test_report_shows_the_ledger_and_every_problem():
 
     assert "demo.yaml expectations: FAILED" in report
     assert "seq 1" in report
-    assert "missing LS 54" in report
+    assert "missing LS [54]" in report
 
 
 def test_report_of_a_pass_says_passed_and_lists_the_uploads():
