@@ -1,15 +1,16 @@
 # One pod on CERN's OpenShift
 
 A worked example of putting the [one-pod deployment](../README.md#one-pod-on-kubernetes) on one particular cluster:
-CERN's OpenShift (OKD, the "PaaS"), with the UI at an HTTPS address reachable **from the CERN network only**, behind a
-login. No OpenShift experience is assumed. That page says what the deployment is and
-[what it doesn't do](../README.md#what-this-deployment-doesnt-do); this one, what's different here.
+CERN's OpenShift (OKD, the "PaaS"), with the UI at an HTTPS address reachable **from the CERN network only**: anyone there
+can look at it, and changing anything takes a login. No OpenShift experience is assumed. That page says what the
+deployment is and [what it doesn't do](../README.md#what-this-deployment-doesnt-do); this one, what's different here.
 
 `kustomization.yaml` puts this on top of [`../onepod/`](../onepod/), for `oc apply -k`:
 
 - **An in-cluster image build**, so no registry of your own: an `ImageStream` and a `BuildConfig`
   ([`ngt-airflow-openshift.yaml`](ngt-airflow-openshift.yaml)), and an image trigger that rolls out every new build.
-- **A `Route`** for the UI, where another cluster would have an Ingress.
+- **A `Route`** for the UI, where another cluster would have an Ingress. It terminates TLS, so the login's cookies are
+  set to https only.
 - **CERN's pull-through cache of Docker Hub** for the base image and Postgres, as Docker Hub rate-limits a cluster's
   shared addresses.
 - **No fixed UID for `postgres`.** OpenShift's `restricted` security policy (its SCC) assigns a UID from the project's
@@ -86,15 +87,17 @@ oc get pods                             # 2/2 Running
 
 ```bash
 oc get route ngt-airflow -o jsonpath='https://{.spec.host}{"\n"}'     # https://ngt-airflow-<project>.app.cern.ch
-oc exec deploy/ngt-airflow -c airflow -- bash -c 'cat $AIRFLOW_HOME/simple_auth_manager_passwords.json.generated'
+oc exec deploy/ngt-airflow -c airflow -- bash -c 'cat $AIRFLOW_HOME/admin_password'
 ```
 
-From the CERN network (or through a tunnel, e.g. `ssh -D` via LXPLUS), log in with one of the two generated accounts:
-`viewer` to hand out, `admin` to keep to yourself. A new pod generates new passwords.
+From the CERN network (or through a tunnel, e.g. `ssh -D` via LXPLUS), anyone can look at the UI, with no login. To change
+anything, log in at `/auth/login/` (the Home page links to it) as `admin`, with that password, and keep it to yourself. A
+new pod generates a new one.
 
 **Keep the Route as it is.** Without an `haproxy.router.openshift.io/ip_whitelist` annotation, CERN's routers only let in
-the CERN network. `oc get route -o yaml` will show that annotation with CERN's address ranges: that's the platform adding
-its default, so leave it. Setting it to `''` would put this login page on the Internet.
+the CERN network, and that's all that limits who can read this UI. `oc get route -o yaml` will show that annotation with
+CERN's address ranges: that's the platform adding its default, so leave it. Setting it to `''` would put the whole UI on
+the Internet, for anyone to read.
 
 For a nicer name than the default, under `app.cern.ch`, `web.cern.ch` or `docs.cern.ch`:
 `oc patch route ngt-airflow -p '{"spec":{"host":"ngt-demo.app.cern.ch"}}'`.
@@ -129,7 +132,7 @@ oc delete -k airflow_automation/airflow_containers/openshift/   # remove everyth
 | "Application not available" | The router can't reach the pod | All containers ready? `oc get endpoints` non-empty? See the guide's FAQ |
 | `HostAlreadyClaimed` | Someone else has that hostname | Choose another |
 | `OOMKilled` | Over the memory limit | Raise the limit, or lower `AIRFLOW__CORE__PARALLELISM` |
-| Restarting, liveness probe failed | A component died, and the probe restarts the container | `oc logs deploy/ngt-airflow -c airflow --previous`: each line starts with the component's name |
+| Restarting | A component died, which takes the container with it, or hung, which fails the liveness probe | `oc logs deploy/ngt-airflow -c airflow --previous`: each line starts with the component's name |
 | `CrashLoopBackOff` | The same, repeatedly | After looking at the logs, delete the pod |
 
 `oc logs deploy/ngt-airflow -c airflow` shows all four components, `oc exec -it deploy/ngt-airflow -c airflow -- bash` gets

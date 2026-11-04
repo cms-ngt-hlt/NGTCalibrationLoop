@@ -65,8 +65,11 @@ def test_rendered_pod_asks_for_nothing_the_restricted_scc_would_reject():
 def test_rendered_overlay_is_the_base_plus_what_this_cluster_needs():
     rendered = _rendered()
     assert set(rendered) == {"ImageStream", "BuildConfig", "Deployment", "Service", "Route"}
-    images = {c["name"]: c["image"] for c in rendered["Deployment"]["spec"]["template"]["spec"]["containers"]}
-    assert images["postgres"] == "registry.cern.ch/docker.io/library/postgres:16"
+    containers = {c["name"]: c for c in rendered["Deployment"]["spec"]["template"]["spec"]["containers"]}
+    assert containers["postgres"]["image"] == "registry.cern.ch/docker.io/library/postgres:16"
+    env = {e["name"]: e["value"] for e in containers["airflow"]["env"]}
+    assert env["AIRFLOW__FAB__AUTH_ROLE_PUBLIC"] == "Viewer", "the base's own settings are still there"
+    assert env["AIRFLOW__FAB__ENABLE_PROXY_FIX"] == env["AIRFLOW__FAB__COOKIE_SECURE"] == "True"
     triggers = json.loads(rendered["Deployment"]["metadata"]["annotations"]["image.openshift.io/triggers"])
     assert triggers[0]["from"] == {"kind": "ImageStreamTag", "name": "ngt-airflow:latest"}
     assert '@.name=="airflow"' in triggers[0]["fieldPath"]
