@@ -1,0 +1,150 @@
+# The Airflow prototype as it is, in one pod on Kubernetes: everything Airflow under one `airflow
+# standalone`, a Postgres sidecar, the fake toolchain, all state on emptyDirs. A disposable demo, not
+# a production deployment: a new pod starts from nothing, which is also how you reset it. Plain
+# Kubernetes, for any cluster: what depends on the cluster goes on top, as a kustomize overlay. How to
+# deploy it, and what it deliberately doesn't do: ../README.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngt-airflow
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # no point in a second pod overlapping: it'd have its own, empty state
+  selector:
+    matchLabels:
+      app: ngt-airflow
+  template:
+    metadata:
+      labels:
+        app: ngt-airflow
+    spec:
+      automountServiceAccountToken: false
+      # Kubernetes would otherwise set Docker-link-style variables for each Service, here
+      # NGT_AIRFLOW_PORT=tcp://<ip>:8080, which is also airflow_env.sh's UI port: a crash loop.
+      enableServiceLinks: false
+      # With the containers' own settings below, this meets the `restricted` Pod Security level.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: airflow
+          image: ngt-airflow:dev  # a placeholder for your own build: see ../README.md
+          args: ["bash", "/opt/ngt/airflow_automation/airflow_containers/onepod/start_onepod.sh"]
+          env:
+            # Over the pod's own loopback, where only this pod's containers can reach it (the
+            # postgres container below listens nowhere else), so it needs no password.
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              value: postgresql+psycopg2://airflow@localhost:5432/airflow
+            # On the emptyDir, so the generated logins and secrets outlive a container restart.
+            - name: AIRFLOW_HOME
+              value: /ngt-data/airflow-home
+            # Other people may reach this UI: two logins, generated at first start, instead of the
+            # bare-host demo's no-login admin mode.
+            - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
+              value: admin:admin,viewer:viewer
+            # Unpaused from the first parse, so the watchers run in a pod no one has touched yet.
+            - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+              value: "False"
+            # Keeps LocalExecutor's worker processes within the memory limit below.
+            - name: AIRFLOW__CORE__PARALLELISM
+              value: "8"
+            # See airflow_demo.sh's demo_env_exports.
+            - name: NGT_RUN_END_GRACE_SECONDS
+              value: "20"
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 350m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /api/v2/monitor/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/v2/monitor/health
+              port: http
+            periodSeconds: 10
+          # `airflow standalone` doesn't restart a component that dies, so have the kubelet restart
+          # the whole container when the API server reports one gone (it does so 30s after its
+          # last heartbeat).
+          livenessProbe:
+            exec:
+              command:
+                - python3
+                - -c
+                - |
+                  import json, urllib.request
+                  health = json.load(urllib.request.urlopen("http://localhost:8080/api/v2/monitor/health", timeout=8))
+                  raise SystemExit(any(health[c]["status"] != "healthy" for c in ("scheduler", "triggerer", "dag_processor")))
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: ngt-data
+              mountPath: /ngt-data
+        - name: postgres
+          image: postgres:16
+          args: ["-c", "listen_addresses=localhost"]
+          env:
+            - name: POSTGRES_USER
+              value: airflow
+            - name: POSTGRES_DB
+              value: airflow
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: trust
+            # A subdirectory, because a non-root UID can't take over the mount point itself.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow", "-d", "airflow"]
+            periodSeconds: 5
+          securityContext:
+            # The image's own user is root, which runAsNonRoot refuses. This is its postgres user.
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: ngt-data
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: postgres-data
+          emptyDir:
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngt-airflow
+spec:
+  selector:
+    app: ngt-airflow
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

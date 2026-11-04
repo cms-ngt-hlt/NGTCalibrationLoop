@@ -1,0 +1,5 @@
+# For a cluster's own overlay to build on, with `resources: [../onepod]`: see ../README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ngt-airflow-onepod.yaml
