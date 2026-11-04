@@ -32,6 +32,10 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
     `airflow_dags/` (one doc per design: sequence diagrams, batching semantics, trade-offs).
   - `airflow_demo/` — the Airflow adapter for the live-test setup: `airflow_env.sh`,
     `airflow_demo.sh` (+ `watch_views.py`, the Airflow-side views `play --monitor` shows).
+  - `airflow_containers/` — the same in containers, from one image (`Dockerfile`): `compose/`
+    (one container per Airflow component, driven by `airflow_compose.sh`), `onepod/` (everything
+    in one pod on any Kubernetes cluster). Its `README.md` is the deployment tutorial. Inside a container,
+    `airflow_demo.sh` still does everything but the process management (`NGT_AIRFLOW_IN_CONTAINER`).
 - `scenario-player/` — the engine-agnostic offline simulator, with no Airflow dependency:
   `sim_env.sh`, `live_demo.sh` (runs the FSM loops in tmux against it), `seed.py`,
   `scenario_player.py` (+ `scenarios/*.yaml`), `faults.py` (the shared
@@ -64,6 +68,8 @@ pip install -r requirements-dev.txt
 pytest                              # Airflow-dependent tests skip cleanly when
                                      # apache-airflow isn't installed
 pytest -m scenario                  # the slow end-to-end FSM run, deselected by default
+pytest -m container                 # the same against the Airflow containers, needs Docker;
+                                     # also deselected by default, and not run by CI
 ```
 
 CI runs three workflows. `tests.yml` runs `pytest` on Python 3.8-3.12, so everything the suite
@@ -77,8 +83,8 @@ isort flake8` and running each on the targets listed in that workflow's `LINT_TA
 reproduces CI.
 
 For running Airflow itself, the live tmux-based demos, or `scenario-player/scenario_player.py`
-scenarios, see README.md's "Setting up and running Airflow", "Running a live demo of the loops"
-and "Running a live demo with Airflow" sections, and your local override file for this
+scenarios, see README.md's "Setting up and running Airflow", "Running Airflow in containers",
+"Running a live demo of the loops" and "Running a live demo with Airflow" sections, and your local override file for this
 machine's exact setup. Don't re-document those commands here — one of the two copies will drift.
 
 ## Committing

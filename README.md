@@ -343,6 +343,11 @@ The same mocks as above apply, except that job launches are intercepted one leve
   installed (e.g. a plain Windows `.venv`) and the rest of the suite still runs. Where Airflow
   *is* installed, run `source airflow_automation/airflow_demo/airflow_env.sh` first so
   `import airflow` picks up the right `AIRFLOW_HOME`/DB config.
+- `tests/airflow-ngt/test_airflow_containers.py` -- the container deployments without a container runtime:
+  that the manifest stays plain Kubernetes and meets the `restricted` Pod Security level, that the Compose files
+  run as an arbitrary user, that the UI stays closed, and how `airflow_demo.sh` behaves inside a container. Its slow
+  counterpart, `test_containers_live.py`, is deselected by default (`pytest -m container`, needs Docker): it plays
+  a scenario against both deployments.
 
 ## The offline simulator (`scenario-player/`)
 
@@ -579,6 +584,9 @@ implementation to Airflow 3.3.1) is the planned improvement for 2026 data-taking
 
 ## Setting up and running Airflow
 
+This is the setup on a bare host, for working on the DAGs; to run it in containers instead, with no
+venv, Postgres or tmux on the host, see "Running Airflow in containers" below.
+
 Airflow has no official Windows support -- run it from a Linux host (WSL works fine on
 Windows). This repo targets **Airflow 3.3.1** on Python 3.12, with `LocalExecutor` against a
 local Postgres instance (needed for real task parallelism across the DAGs; SQLite only
@@ -677,6 +685,28 @@ Luigi/REANA/Dagster/Prefect/Kestra), and one summarising the real NGT demonstrat
 hardware, event rates/sizes, buffer-sizing calculations and processing-time benchmarks (external
 CERN/CMS project reports, not this repo's mocked dev environment).
 
+## Running Airflow in containers
+
+`airflow_automation/airflow_containers/` runs the same DAGs against the same fake toolchain from one
+image, in two shapes. Its [README](airflow_automation/airflow_containers/README.md) is the tutorial.
+
+- **Separate containers on one machine** (`compose/airflow_compose.sh`, Docker Compose): API server, scheduler,
+  dag-processor and triggerer each in their own container, with Postgres and a one-shot init -- the layout
+  Airflow's deployment docs describe, restarted and health-checked by the runtime. It takes the same commands
+  and scenarios as `airflow_demo.sh`, which it runs inside a one-shot container for everything but
+  the process management:
+  ```bash
+  ./airflow_automation/airflow_containers/compose/airflow_compose.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
+  ```
+- **One pod on Kubernetes** (`onepod/`): the quickest way to put the UI on a cluster. Everything under one
+  `airflow standalone` next to a Postgres sidecar, all state on `emptyDir`s, behind a login. Plain Kubernetes that
+  meets the `restricted` Pod Security level; what depends on the cluster, such as how the image gets there and how
+  the UI gets exposed, goes on top as a kustomize overlay.
+
+The image works as an arbitrary non-root user with no capabilities, the strictest way a cluster can run it, and the
+Compose files run it that way. None of this changes what "Deploying on the calibration nodes" above says about the
+real pipeline.
+
 ## Package layout
 
 - `NGTLoopStep2/3/4.py` and `ngt_loop_config.py` -- the original FSM loop scripts (see "Every
@@ -702,8 +732,9 @@ CERN/CMS project reports, not this repo's mocked dev environment).
 - `tests/` -- see "Running the FSM logic locally / tests" and "Tests of the library and the
   simulator" above.
 - `airflow_automation/` -- everything specific to the Airflow prototype: `airflow_dags/` (the DAG
-  design above), `airflow-designs-docs/` (its write-up) and `airflow_demo/` (the Airflow
-  adapter for the live-test setup below: `airflow_env.sh` and `airflow_demo.sh`).
+  design above), `airflow-designs-docs/` (its write-up), `airflow_demo/` (the Airflow
+  adapter for the live-test setup below: `airflow_env.sh` and `airflow_demo.sh`) and
+  `airflow_containers/` (the image and the container deployments, see "Running Airflow in containers").
   `airflow_dags/` is still imported as the top-level
   package `airflow_dags` -- `airflow_env.sh` and `tests/conftest.py` put `airflow_automation/`
   on the path for that.
