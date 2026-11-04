@@ -27,6 +27,9 @@
 
 # API server / UI port (default: 8100 + the instance hash, i.e. 8100-8899), and
 # the scheduler's and triggerer's task-log servers (default: that port + 1000 / + 2000).
+# The interface the API server / UI listens on. 0.0.0.0 lets other machines in: with the no-login
+# mode below, as admin, so turn that off first.
+#AIRFLOW__API__HOST="127.0.0.1"
 #NGT_AIRFLOW_PORT=8100
 #AIRFLOW__LOGGING__WORKER_LOG_SERVER_PORT=9100
 #AIRFLOW__LOGGING__TRIGGER_LOG_SERVER_PORT=10100

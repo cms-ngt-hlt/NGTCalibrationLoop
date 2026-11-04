@@ -82,6 +82,11 @@ export AIRFLOW__DAG_PROCESSOR__MIN_FILE_PROCESS_INTERVAL="${AIRFLOW__DAG_PROCESS
 # than part of a combined webserver process.
 export AIRFLOW__API__EXPOSE_CONFIG="${AIRFLOW__API__EXPOSE_CONFIG:-True}"
 
+# This UI has no login and makes everyone admin (below), so it listens on this machine only, not
+# Airflow's default of every interface. A browser on the Windows side of WSL still reaches it, at
+# http://localhost:<port>, through WSL's localhost forwarding; the WSL VM's own IP no longer does.
+export AIRFLOW__API__HOST="${AIRFLOW__API__HOST:-127.0.0.1}"
+
 # Ports. The API server/UI gets 8100-8899, picked from the instance hash so two
 # instances don't land on the same one; the scheduler's and triggerer's task-log servers
 # (Airflow's own defaults, 8793/8794, are the same for every instance) are offset from it.

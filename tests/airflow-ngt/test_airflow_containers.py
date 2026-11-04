@@ -272,3 +272,20 @@ def test_compose_script_writes_its_secrets_once_and_owner_only(tmp_path):
 
     subprocess.run(["bash", str(COMPOSE_SH), "status"], env=env, capture_output=True, text=True, check=True)
     assert env_file.read_text(encoding="utf-8") == written
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    "environment, expected", [({}, "127.0.0.1"), ({"AIRFLOW__API__HOST": "0.0.0.0"}, "0.0.0.0")]
+)
+def test_bare_host_ui_stays_on_this_machine_unless_overridden(tmp_path, environment, expected):
+    """It has no login and makes everyone admin."""
+    result = subprocess.run(
+        ["bash", "-c", f'source "{AIRFLOW_DEMO.parent / "airflow_env.sh"}" && echo "$AIRFLOW__API__HOST"'],
+        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "NGT_SKIP_LOCAL_ENV": "1", **environment},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected

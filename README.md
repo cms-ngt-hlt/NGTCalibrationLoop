@@ -643,7 +643,8 @@ No `airflow users create` step: `airflow_automation/airflow_demo/airflow_env.sh`
 new default, replacing FAB) treats every request as admin with no login at all -- appropriate
 for this offline, single-user dev/demo instance specifically (that auth manager is explicitly
 documented as development/testing-only, which is exactly what this is), not something to carry
-into a real deployment.
+into a real deployment. For the same reason the UI listens on `127.0.0.1` only (`AIRFLOW__API__HOST`):
+a browser on the Windows side of WSL still reaches it at `http://localhost:<port>`, but not at the WSL IP.
 
 Why `pip install -e tests/stubs`: the fake `omsapi` package (see below) needs to be importable
 by Airflow's scheduler subprocesses. `PYTHONPATH` set in the launching shell was not reliably
