@@ -67,6 +67,27 @@ def test_env_sh_wires_up_fault_injection(env_sh):
     assert Path(found).resolve() == (REPO_ROOT / "scenario-player" / "faults.py").resolve()
 
 
+def test_sim_setup_leaves_an_already_installed_stub_alone(tmp_path):
+    """NGT_SIM_STUB_INSTALLED, as in the Airflow container image: no venv needed, and no `pip`, which
+    would try to write next to the stub's sources, read-only there."""
+    home = tmp_path / "demo-env"
+    fake_bin = tmp_path / "fake-pip"
+    fake_bin.mkdir()
+    pip = fake_bin / "pip"
+    pip.write_text("#!/bin/sh\necho pip was run >&2\nexit 1\n", encoding="utf-8")
+    pip.chmod(0o755)
+    (fake_bin / "python3").symlink_to(sys.executable)
+    result = subprocess.run(
+        ["env", "-i", f"PATH={fake_bin}:/usr/bin:/bin", f"NGT_DEV_HOME={home}", "NGT_SIM_STUB_INSTALLED=1",
+         "NGT_SKIP_LOCAL_ENV=1", "bash", "-c", f'source "{SIM_ENV}" && sim_setup'],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (home / "env.sh").is_file()
+
+
 def _resolved_dev_home(tmp_path, local_sim_env, **env):
     """$NGT_DEV_HOME as a clean bash resolves it from a copy of sim_env.sh that has
     `local_sim_env` beside it -- a scratch checkout, so the real one's file is never touched."""
