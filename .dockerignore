@@ -1,0 +1,14 @@
+# Build context of airflow_automation/airflow_containers/Dockerfile: an allowlist of what the image
+# needs, so a checkout's scratch state, venvs and local overrides can't reach it.
+*
+!ngt_calibration_loop/
+!airflow_automation/
+!scenario-player/
+!calibrationYAML/
+!tests/stubs/
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
+**/local_*_env.sh
+**/.env
+airflow_automation/airflow-designs-docs/

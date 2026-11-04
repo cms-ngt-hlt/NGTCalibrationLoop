@@ -38,6 +38,12 @@
 # or, for a whole scenario file, from a cold start:
 #   ./airflow_automation/airflow_demo/airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
 #
+# Inside a container (NGT_AIRFLOW_IN_CONTAINER, set by airflow_containers/Dockerfile) everything but
+# the process management works the same: the image is the venv and the container runtime keeps
+# Airflow's processes running, so start/stop/status/ui/logs are refused, and a reset-* that mustn't
+# run under live processes leaves stopping them to the caller (airflow_containers/compose/
+# airflow_compose.sh does; in the one-pod deployment a new pod is the reset).
+#
 # $NGT_DEV_HOME (default ./demo-env, a gitignored directory inside this repo)
 # holds the fake data/EOS/CMSSW scratch state, same default as scenario-player/seed.py
 # uses directly -- delete it any time to reset the demo data. The Airflow
@@ -140,6 +146,7 @@ USAGE
 }
 
 activate_venv() {
+  [ -z "${NGT_AIRFLOW_IN_CONTAINER:-}" ] || return 0
   if [ ! -f "$NGT_AIRFLOW_VENV/bin/activate" ]; then
     echo "No Airflow venv at $NGT_AIRFLOW_VENV -- see README.md's Airflow setup section" >&2
     exit 1
@@ -194,6 +201,7 @@ cmd_setup() {
   sim_setup
   ensure_airflow_db
   airflow db migrate
+  [ -z "${NGT_AIRFLOW_IN_CONTAINER:-}" ] || return 0
   echo
   echo "Set up $NGT_DEV_HOME and the Airflow instance in $AIRFLOW_HOME (database $NGT_AIRFLOW_DB_NAME)"
   echo "Next: $0 start"
@@ -567,13 +575,15 @@ cmd_play() {
   fi
   # A malformed scenario fails here, before any of Airflow is touched.
   python3 "$PLAYER" "$@" --only-list-calibrations > /dev/null
-  for session in "$SESSION_SCHEDULER" "$SESSION_DAG_PROCESSOR" "$SESSION_API_SERVER" "$SESSION_TRIGGERER"; do
-    if ! tmux has-session -t "$session" 2>/dev/null; then
-      cmd_start
-      echo
-      break
-    fi
-  done
+  if [ -z "${NGT_AIRFLOW_IN_CONTAINER:-}" ]; then
+    for session in "$SESSION_SCHEDULER" "$SESSION_DAG_PROCESSOR" "$SESSION_API_SERVER" "$SESSION_TRIGGERER"; do
+      if ! tmux has-session -t "$session" 2>/dev/null; then
+        cmd_start
+        echo
+        break
+      fi
+    done
+  fi
   echo "Waiting for the dag-processor to parse ngt_dags_watch.py..."
   _wait_for_watch_design dags
   cmd_pause_unpause_watch unpause > /dev/null
@@ -640,6 +650,15 @@ cmd_reset_scenario() {
     cmd_start
   fi
 }
+
+if [ -n "${NGT_AIRFLOW_IN_CONTAINER:-}" ]; then
+  case "${1:-}" in
+    start|stop|status|ui|logs)
+      echo "In a container the container runtime runs Airflow's processes -- see airflow_automation/airflow_containers/README.md." >&2
+      exit 1
+      ;;
+  esac
+fi
 
 case "${1:-}" in
   setup) cmd_setup ;;
