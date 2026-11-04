@@ -706,6 +706,8 @@ image, in two shapes. Its [README](airflow_automation/airflow_containers/README.
   `airflow standalone` next to a Postgres sidecar, all state on `emptyDir`s, behind a login. Plain Kubernetes that
   meets the `restricted` Pod Security level; what depends on the cluster, such as how the image gets there and how
   the UI gets exposed, goes on top as a kustomize overlay.
+- **On CERN's OpenShift** (`openshift/`): a worked example of such an overlay, with its own tutorial: an in-cluster
+  image build and a Route reachable from the CERN network only. Not yet run on the real cluster.
 
 The image works as an arbitrary non-root user with no capabilities, the strictest way a cluster can run it, and the
 Compose files run it that way. None of this changes what "Deploying on the calibration nodes" above says about the
