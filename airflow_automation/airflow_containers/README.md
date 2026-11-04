@@ -52,10 +52,10 @@ scenario against this stack and against the one-pod emulation, in a few minutes.
 
 ## One pod on Kubernetes
 
-What you end up with: the prototype running in one pod on a Kubernetes cluster, its UI behind a login. The pod
-holds two containers: Airflow, with all its components under one `airflow standalone`, and a Postgres next to it.
-Everything is ephemeral: **deleting the pod deletes all state**, which is also how you reset it. It's a demo with
-fake data, not a way to run the real pipeline.
+What you end up with: the prototype running in one pod on a Kubernetes cluster. Anyone who can reach its UI can look at
+it, and changing anything takes logging in as its Admin. The pod holds two containers: Airflow, with all its components,
+and a Postgres next to it. Everything is ephemeral: **deleting the pod deletes all state**, which is also how you reset
+it. It's a demo with fake data, not a way to run the real pipeline.
 
 [`onepod/ngt-airflow-onepod.yaml`](onepod/ngt-airflow-onepod.yaml) is plain Kubernetes, a Deployment and a Service,
 and meets the `restricted` [Pod Security level](https://kubernetes.io/docs/concepts/security/pod-security-standards/).
@@ -79,7 +79,7 @@ cd airflow_automation/airflow_containers/onepod
 docker compose up -d --build
 docker compose exec airflow airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
 # ...ends with "expectations: PASSED". The UI is at http://localhost:8099 (NGT_ONEPOD_PORT).
-docker compose exec airflow bash -c 'cat $AIRFLOW_HOME/simple_auth_manager_passwords.json.generated'
+docker compose exec airflow bash -c 'cat $AIRFLOW_HOME/admin_password'
 docker compose down -v
 ```
 
@@ -114,18 +114,19 @@ and 2.25 GiB, and used about 1.5 GiB of memory at its peak.
 
 ```bash
 kubectl port-forward svc/ngt-airflow 8099:8080     # leave it running: the UI is at http://localhost:8099
-kubectl exec deploy/ngt-airflow -c airflow -- bash -c 'cat $AIRFLOW_HOME/simple_auth_manager_passwords.json.generated'
+kubectl exec deploy/ngt-airflow -c airflow -- bash -c 'cat $AIRFLOW_HOME/admin_password'
 ```
 
-Log in with one of the two generated accounts:
-
-- `viewer` can look at everything and change nothing: the one to hand out.
-- `admin` can do anything, e.g. trigger DAG runs: keep it to yourself.
-
-A new pod generates new passwords.
+- **Anyone who reaches the UI can look at it**, with no login: DAGs, runs, task logs and code, but not connections or
+  variables. Buttons that would change something are still there, and answer "Access Denied".
+- **To change anything**, e.g. to trigger a DAG run, log in at `/auth/login/` (the Home page links to it) as `admin`, with
+  that password. Keep it to yourself. A new pod generates a new one. Under Security -> Users, `admin` can add others.
 
 To show it to other people, expose the Service the way your cluster does that: an Ingress, a Gateway, a LoadBalancer.
-Mind who that lets in, as this login is all that stands in front of the UI ([see below](#what-this-deployment-doesnt-do)).
+Mind who that lets in, since they can all read it. To have them log in for that too, set `AIRFLOW__FAB__AUTH_ROLE_PUBLIC`
+to `""`, and give them users. If what you expose it with terminates TLS, set `AIRFLOW__FAB__ENABLE_PROXY_FIX` and
+`AIRFLOW__FAB__COOKIE_SECURE` to `"True"`, so that the login's cookies are for https only. See also
+[below](#what-this-deployment-doesnt-do).
 
 ### 4. Play a scenario
 
@@ -162,10 +163,11 @@ kubectl delete -f airflow_automation/airflow_containers/onepod/ngt-airflow-onepo
 | Pod rejected over its `runAsUser` | The cluster assigns UIDs itself, and refuses the one `postgres` asks for | Remove it in an [overlay](#adapting-it-to-your-cluster): the image works as any UID |
 | Pod `Pending`, `exceeded quota` | The namespace's quota is too small | `kubectl describe quota`; lower the `requests` in the manifest |
 | `airflow` restarting, `OOMKilled` | Memory limit too low | `kubectl describe pod`; raise the limit, or lower `AIRFLOW__CORE__PARALLELISM` |
-| `airflow` restarting, liveness probe failed | A component died: `airflow standalone` doesn't restart them, so the probe restarts the container | `kubectl logs deploy/ngt-airflow -c airflow --previous`: each line starts with the component's name |
+| `airflow` restarting | A component died, which takes the container with it, or hung, which fails the liveness probe | `kubectl logs deploy/ngt-airflow -c airflow --previous`: each line starts with the component's name |
 | `play` reports nothing happens | Run number already played in this pod | Reset |
 | `play` fails, a calibration uploaded nothing | An earlier scenario's run is still retrying | Reset: see [step 4](#4-play-a-scenario) |
 | The UI's Assets view shows an error for a moment | Airflow's bug, in 3.3.1 and 3.3.2: `GET /api/v2/assets/events` answers 500 while an event's triggered run is still queued | Nothing, it passes |
+| The log has a `ValidationError` for `AuthenticatedMeResponse`, at each page someone opens without logging in | Airflow's bug: `GET /ui/auth/me` answers 500 for an anonymous user | Nothing, the UI does without it |
 
 `kubectl logs deploy/ngt-airflow -c airflow` shows all four components, `kubectl exec -it deploy/ngt-airflow -c airflow -- bash`
 gets you a shell.
@@ -195,7 +197,7 @@ images:
 - **Keep anything.** No persistent storage, on purpose: nothing here is worth keeping, and it needs no storage request.
   Whatever moves the pod, such as a node drain, leaves you with a new, empty one.
 - **Survive load.** One replica, with one `LocalExecutor` on 8 worker processes.
-- **Authenticate properly.** Airflow's Simple Auth Manager is meant for development; it's used here because there's
-  nothing real behind this login. Don't reuse this setup for anything with real credentials.
+- **Authenticate people.** One shared Admin password, on a UI anyone can read, is only fine because there's nothing real
+  behind it. Don't reuse this setup for anything with real credentials.
 - **Run the real pipeline.** That needs real OMS, EOS, CMSSW and conditions DB access: see README.md's "Deploying on the
   calibration nodes".

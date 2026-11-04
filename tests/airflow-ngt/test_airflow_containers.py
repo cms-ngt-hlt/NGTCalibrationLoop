@@ -6,8 +6,11 @@ and that airflow_demo.sh behaves inside a container. The real thing is exercised
 test_containers_live.py, deselected by default.
 """
 
+import contextlib
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTAINERS = REPO_ROOT / "airflow_automation" / "airflow_containers"
 ONEPOD_MANIFEST = CONTAINERS / "onepod" / "ngt-airflow-onepod.yaml"
 ONEPOD_COMPOSE = CONTAINERS / "onepod" / "docker-compose.yaml"
+START_ONEPOD = CONTAINERS / "onepod" / "start_onepod.sh"
 COMPOSE = CONTAINERS / "compose" / "docker-compose.yaml"
 COMPOSE_SH = CONTAINERS / "compose" / "airflow_compose.sh"
 AIRFLOW_DEMO = REPO_ROOT / "airflow_automation" / "airflow_demo" / "airflow_demo.sh"
@@ -82,11 +86,75 @@ def test_service_links_cant_clobber_our_own_settings():
     assert _pod_spec()["enableServiceLinks"] is False
 
 
-def test_pod_ui_needs_a_login_and_keeps_the_config_page_closed():
+def test_pod_ui_is_read_only_without_its_login_and_keeps_the_config_page_closed():
     env = _pod_env("airflow")
-    assert env["AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS"] == "admin:admin,viewer:viewer"
+    assert env["AIRFLOW__CORE__AUTH_MANAGER"].endswith(".FabAuthManager")
+    assert env["AIRFLOW__FAB__AUTH_ROLE_PUBLIC"] == "Viewer"
     assert "AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS" not in env
     assert "AIRFLOW__API__EXPOSE_CONFIG" not in env
+
+
+def _start_onepod(tmp_path):
+    """start_onepod.sh on a fake toolchain, whose scheduler dies at once, leaving a child with its stdout, as
+    a real one's workers do: its exit code, and what it called."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    called = tmp_path / "called"
+    (fake_bin / "airflow").write_text(
+        f'#!/bin/sh\necho "airflow $*" >> "{called}"\n'
+        'case "$1" in\n  scheduler) sleep 60 & exit 3 ;;\n  dag-processor|triggerer|api-server) exec sleep 60 ;;\nesac\n',
+        encoding="utf-8",
+    )
+    (fake_bin / "airflow_demo.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    for tool in ("airflow", "airflow_demo.sh"):
+        (fake_bin / tool).chmod(0o755)
+    if not (fake_bin / "python3").exists():
+        (fake_bin / "python3").symlink_to(sys.executable)
+    (tmp_path / "env.sh").touch()
+    process = subprocess.Popen(
+        ["bash", str(START_ONEPOD)],
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "AIRFLOW_HOME": str(tmp_path / "airflow-home"),
+            "NGT_DEV_HOME": str(tmp_path),
+            "PYTHONPATH": "",
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        return process.wait(timeout=30), called.read_text(encoding="utf-8").splitlines()
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+
+
+@needs_bash
+def test_pod_container_goes_down_with_any_of_its_components(tmp_path):
+    """For the kubelet to restart it. And not `airflow standalone`, which forces Simple Auth Manager."""
+    exit_code, called = _start_onepod(tmp_path)
+    assert exit_code == 3
+    for component in ("scheduler", "dag-processor", "triggerer", "api-server"):
+        assert f"airflow {component}" in called
+    assert "airflow standalone" not in called
+
+
+@needs_bash
+def test_pod_generates_its_admin_login_once(tmp_path):
+    """It's on the emptyDir, which outlives a container restart, as does the user in the database."""
+    _start_onepod(tmp_path)
+    password_file = tmp_path / "airflow-home" / "admin_password"
+    password = password_file.read_text(encoding="utf-8").strip()
+    assert password.isalnum(), "the CLI would take one starting with a dash for an option"
+    assert password_file.stat().st_mode & 0o077 == 0
+
+    _, called = _start_onepod(tmp_path)
+
+    created = [line for line in called if line.startswith("airflow users create")]
+    assert len(created) == 1
+    assert "--role Admin" in created[0] and f"--password {password}" in created[0]
+    assert password_file.read_text(encoding="utf-8").strip() == password
 
 
 def test_pod_database_is_reachable_from_the_pod_only():

@@ -33,7 +33,8 @@ services:
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow@localhost:5432/airflow
       AIRFLOW_HOME: /ngt-data/airflow-home
-      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: admin:admin,viewer:viewer
+      AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+      AIRFLOW__FAB__AUTH_ROLE_PUBLIC: Viewer
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
       AIRFLOW__CORE__PARALLELISM: "8"
       NGT_RUN_END_GRACE_SECONDS: "20"

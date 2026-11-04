@@ -1,6 +1,6 @@
-# The Airflow prototype as it is, in one pod on Kubernetes: everything Airflow under one `airflow
-# standalone`, a Postgres sidecar, the fake toolchain, all state on emptyDirs. A disposable demo, not
-# a production deployment: a new pod starts from nothing, which is also how you reset it. Plain
+# The Airflow prototype as it is, in one pod on Kubernetes: everything Airflow in one container,
+# a Postgres sidecar, the fake toolchain, all state on emptyDirs. A disposable demo, not a
+# production deployment: a new pod starts from nothing, which is also how you reset it. Plain
 # Kubernetes, for any cluster: what depends on the cluster goes on top, as a kustomize overlay. How to
 # deploy it, and what it deliberately doesn't do: ../README.md.
 apiVersion: apps/v1
@@ -37,13 +37,16 @@ spec:
             # postgres container below listens nowhere else), so it needs no password.
             - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
               value: postgresql+psycopg2://airflow@localhost:5432/airflow
-            # On the emptyDir, so the generated logins and secrets outlive a container restart.
+            # On the emptyDir, so the generated login and secrets outlive a container restart.
             - name: AIRFLOW_HOME
               value: /ngt-data/airflow-home
-            # Other people may reach this UI: two logins, generated at first start, instead of the
-            # bare-host demo's no-login admin mode.
-            - name: AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS
-              value: admin:admin,viewer:viewer
+            # Other people may reach this UI, so unlike the bare-host demo's no-login admin mode:
+            # anyone can read it, and changing anything takes the login start_onepod.sh generates.
+            # FAB, as Simple Auth Manager can't let anyone in without a login, other than as admin.
+            - name: AIRFLOW__CORE__AUTH_MANAGER
+              value: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+            - name: AIRFLOW__FAB__AUTH_ROLE_PUBLIC
+              value: Viewer
             # Unpaused from the first parse, so the watchers run in a pod no one has touched yet.
             - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
               value: "False"
@@ -74,9 +77,9 @@ spec:
               path: /api/v2/monitor/health
               port: http
             periodSeconds: 10
-          # `airflow standalone` doesn't restart a component that dies, so have the kubelet restart
-          # the whole container when the API server reports one gone (it does so 30s after its
-          # last heartbeat).
+          # A component that dies takes the container with it (start_onepod.sh), but one that hangs
+          # doesn't, so have the kubelet restart the container when the API server reports one gone
+          # (it does so 30s after its last heartbeat).
           livenessProbe:
             exec:
               command:

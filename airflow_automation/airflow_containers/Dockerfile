@@ -5,12 +5,13 @@
 #
 # Slim: the same five providers as the venv README.md's setup section creates, and well under half
 # the size of the full image (which ships ~100 providers nothing here imports). It has no database
-# drivers, so psycopg2 and asyncpg are added, at the versions Airflow's own constraints pin.
+# drivers and no FAB, so psycopg2, asyncpg and the FAB provider (what onepod/ logs in with) are
+# added, at the versions Airflow's own constraints pin.
 ARG AIRFLOW_BASE_IMAGE=apache/airflow:slim-3.3.1-python3.12
 FROM ${AIRFLOW_BASE_IMAGE}
 
-RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" psycopg2-binary asyncpg \
-      --constraint "${HOME}/constraints.txt"
+RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" apache-airflow-providers-fab \
+      psycopg2-binary asyncpg --constraint "${HOME}/constraints.txt"
 
 COPY --chown=airflow:root ngt_calibration_loop/ /opt/ngt/ngt_calibration_loop/
 COPY --chown=airflow:root airflow_automation/ /opt/ngt/airflow_automation/

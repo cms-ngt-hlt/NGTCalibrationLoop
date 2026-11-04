@@ -49,6 +49,18 @@ def _wait_healthy(port, timeout=240):
     pytest.fail(f"Airflow never became healthy: {last}")
 
 
+def _status(url, method="GET", body=None, token=None):
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(body).encode() if body is not None else None
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers, method=method), timeout=10) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+
+
 def test_scenario_passes_on_the_separate_containers_stack(tmp_path):
     env = dict(
         os.environ,
@@ -94,8 +106,27 @@ def test_scenario_passes_on_the_one_pod_emulation():
         assert played.returncode == 0, played.stdout + played.stderr
         assert "expectations: PASSED" in played.stdout
 
-        with pytest.raises(urllib.error.HTTPError) as anonymous:
-            urllib.request.urlopen("http://localhost:18292/api/v2/dags", timeout=5)
-        assert anonymous.value.code == 401
+        # Anyone can read, and is told where to log in. Changing anything takes that login.
+        base = "http://localhost:18292"
+        dag = f"{base}/api/v2/dags/ngt_watch_run_primer"
+        assert _status(f"{base}/api/v2/dags") == 200
+        assert _status(f"{base}/api/v2/connections") == 403
+        assert _status(dag, method="PATCH", body={"is_paused": False}) == 403
+        with urllib.request.urlopen(f"{base}/ui/config", timeout=10) as response:
+            assert "/auth/login/" in json.load(response)["dashboard_alert"][0]["text"]
+        assert _status(f"{base}/auth/login/") == 200
+
+        password = _run(
+            [*compose, "exec", "-T", "airflow", "bash", "-c", "cat $AIRFLOW_HOME/admin_password"], env, cwd=ONEPOD_DIR
+        ).stdout.strip()
+        assert _status(f"{base}/auth/token", method="POST", body={"username": "admin", "password": "wrong"}) == 401
+        login = urllib.request.Request(
+            f"{base}/auth/token",
+            data=json.dumps({"username": "admin", "password": password}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(login, timeout=10) as response:
+            token = json.load(response)["access_token"]
+        assert _status(dag, method="PATCH", body={"is_paused": False}, token=token) == 200
     finally:
         _run([*compose, "down", "-v"], env, cwd=ONEPOD_DIR)
