@@ -51,3 +51,20 @@
 
 # The file watchers' grace period after a run ends, seconds (demo default 20; production 1800).
 #NGT_RUN_END_GRACE_SECONDS=20
+
+# For airflow_containers/compose/airflow_compose.sh only:
+# The UI's port on 127.0.0.1 (default: NGT_AIRFLOW_PORT + 3000), and the Compose project.
+#NGT_COMPOSE_PORT=11100
+#COMPOSE_PROJECT_NAME="ngt_airflow_$NGT_INSTANCE"
+# The image built and run, and what it builds on. Set them to go through a mirror of Docker Hub, e.g.
+# registry.cern.ch/docker.io/apache/airflow:slim-3.3.1-python3.12 and .../library/postgres:16.
+#NGT_AIRFLOW_IMAGE="ngt-airflow:$NGT_INSTANCE"
+#NGT_AIRFLOW_BASE_IMAGE="apache/airflow:slim-3.3.1-python3.12"
+#NGT_POSTGRES_IMAGE="postgres:16"
+# False for real logins instead of no-login admin (airflow_compose.sh logins prints them), and who those are.
+#NGT_AIRFLOW_ALL_ADMINS="True"
+#NGT_AIRFLOW_USERS="admin:admin,viewer:viewer"
+# The UID every container runs as, with GID 0 -- any will do, as on a cluster that assigns one.
+#NGT_CONTAINER_UID=1000650000
+# The generated secrets: the database volume depends on them, so keep the file as long as the volumes.
+#NGT_COMPOSE_ENV_FILE="$REPO_DIR/airflow_automation/airflow_containers/compose/.env"

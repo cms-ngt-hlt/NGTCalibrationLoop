@@ -1,0 +1,159 @@
+# The Airflow prototype the way Airflow's deployment docs want it: one container per component
+# (API server, scheduler, dag-processor, triggerer), a database of its own and a one-shot init,
+# all from one image. Trimmed from Airflow's own docker-compose.yaml to LocalExecutor -- Redis and
+# Celery workers only exist to distribute tasks over several machines. Drive it with
+# airflow_compose.sh next to this file, which also writes the .env this file reads its secrets from.
+#
+# Every container runs the strictest way a Kubernetes cluster can run it -- an arbitrary non-root UID
+# with GID 0, no capabilities -- and mounts only the volumes its component needs, so what works here
+# maps one to one onto Deployments and PersistentVolumeClaims (see ../README.md).
+
+x-airflow-common: &airflow-common
+  image: ${NGT_AIRFLOW_IMAGE:-ngt-airflow:dev}
+  user: "${NGT_CONTAINER_UID:-1000650000}:0"
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${NGT_POSTGRES_PASSWORD:?run airflow_compose.sh}@postgres/airflow
+    # Tasks reach Airflow through the API server's Execution API, over the network now.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    # All components must agree on these. On a single host airflow.cfg's generated values do that;
+    # separate containers have one airflow.cfg each.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${NGT_JWT_SECRET:?run airflow_compose.sh}
+    AIRFLOW__API__SECRET_KEY: ${NGT_API_SECRET_KEY:?run airflow_compose.sh}
+    AIRFLOW__CORE__FERNET_KEY: ${NGT_FERNET_KEY:?run airflow_compose.sh}
+    # No login, as in airflow_env.sh: the UI is published on localhost only (below). Set to False for
+    # Simple Auth Manager's generated logins: `airflow_compose.sh logins` prints them.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: ${NGT_AIRFLOW_ALL_ADMINS:-True}
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: ${NGT_AIRFLOW_USERS:-admin:admin,viewer:viewer}
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "15"
+    AIRFLOW__DAG_PROCESSOR__MIN_FILE_PROCESS_INTERVAL: "10"
+    # Read at DAG parse time, so the dag-processor needs it as much as the triggerer. See airflow_demo.sh.
+    NGT_RUN_END_GRACE_SECONDS: ${NGT_RUN_END_GRACE_SECONDS:-20}
+
+services:
+  postgres:
+    image: ${NGT_POSTGRES_IMAGE:-postgres:16}
+    user: "${NGT_CONTAINER_UID:-1000650000}:0"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${NGT_POSTGRES_PASSWORD:?run airflow_compose.sh}
+      POSTGRES_DB: airflow
+      # A subdirectory, because an arbitrary UID can't take over the mount point itself.
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-U", "airflow", "-d", "airflow"]
+      interval: 5s
+      retries: 10
+      start_period: 5s
+
+  # Creates $NGT_DEV_HOME and migrates the database, then exits. It runs on every `up`, possibly next
+  # to running services: repeating `db migrate` is safe, but sim_setup rewrites files the watchers
+  # read, so that only happens the first time.
+  airflow-init:
+    <<: *airflow-common
+    build:
+      context: ../../..
+      dockerfile: airflow_automation/airflow_containers/Dockerfile
+      args:
+        AIRFLOW_BASE_IMAGE: ${NGT_AIRFLOW_BASE_IMAGE:-apache/airflow:slim-3.3.1-python3.12}
+    command: ["bash", "-c", 'if [ -f "$$NGT_DEV_HOME/env.sh" ]; then airflow db migrate; else airflow_demo.sh setup; fi']
+    restart: "no"
+    volumes:
+      - ngt-data:/ngt-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  airflow-api-server:
+    <<: *airflow-common
+    # --proxy-headers + FORWARDED_ALLOW_IPS: believe a reverse proxy's X-Forwarded-Proto, so a
+    # TLS-terminating one (an Ingress, say) gets secure cookies.
+    command: ["api-server", "--proxy-headers"]
+    environment:
+      <<: *airflow-common-env
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      - "127.0.0.1:${NGT_COMPOSE_PORT:-8080}:8080"
+    volumes:
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on: &after-init
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # LocalExecutor: tasks run in here, so it's where the fake toolchain and the scratch data have to be.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: ["scheduler"]
+    volumes:
+      - ngt-data:/ngt-data
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://localhost:8974/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    depends_on: *after-init
+
+  # Only parses DAGs, so no scratch data: ngt_dags_watch.py must stay importable without it.
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: ["dag-processor"]
+    volumes:
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type DagProcessorJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    depends_on: *after-init
+
+  # Hosts the AssetWatchers, which watch the fake OMS and the run directories.
+  airflow-triggerer:
+    <<: *airflow-common
+    command: ["triggerer"]
+    volumes:
+      - ngt-data:/ngt-data
+      - airflow-logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 30s
+    depends_on: *after-init
+
+  # airflow_compose.sh's way into this stack: one-shot containers running airflow_demo.sh (the
+  # scenario player, faults, resets), against the same volumes and database. Not a long-running service.
+  tools:
+    <<: *airflow-common
+    profiles: [tools]
+    restart: "no"
+    volumes:
+      - ngt-data:/ngt-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  ngt-data:
+  airflow-logs:

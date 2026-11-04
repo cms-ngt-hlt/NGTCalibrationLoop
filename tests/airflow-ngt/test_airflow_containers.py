@@ -2,7 +2,8 @@
 The container deployments in airflow_automation/airflow_containers/, without a container runtime: what
 they ask of a cluster (one enforcing the `restricted` Pod Security level rejects a pod that gets this
 wrong, at deploy time, on a cluster you may not have at hand), that the UI stays as closed as intended,
-and that airflow_demo.sh behaves inside a container.
+and that airflow_demo.sh behaves inside a container. The real thing is exercised by
+test_containers_live.py, deselected by default.
 """
 
 import re
@@ -18,6 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTAINERS = REPO_ROOT / "airflow_automation" / "airflow_containers"
 ONEPOD_MANIFEST = CONTAINERS / "onepod" / "ngt-airflow-onepod.yaml"
 ONEPOD_COMPOSE = CONTAINERS / "onepod" / "docker-compose.yaml"
+COMPOSE = CONTAINERS / "compose" / "docker-compose.yaml"
+COMPOSE_SH = CONTAINERS / "compose" / "airflow_compose.sh"
 AIRFLOW_DEMO = REPO_ROOT / "airflow_automation" / "airflow_demo" / "airflow_demo.sh"
 
 needs_bash = pytest.mark.skipif(
@@ -105,8 +108,9 @@ def test_local_emulation_of_the_pod_matches_the_manifest():
     assert services["postgres"]["ports"] == ["127.0.0.1:${NGT_ONEPOD_PORT:-8099}:8080"]
 
 
-def test_compose_runs_every_container_as_an_arbitrary_non_root_user():
-    for name, service in _compose(ONEPOD_COMPOSE).items():
+@pytest.mark.parametrize("path", [ONEPOD_COMPOSE, COMPOSE], ids=["onepod", "compose"])
+def test_compose_runs_every_container_as_an_arbitrary_non_root_user(path):
+    for name, service in _compose(path).items():
         uid, gid = service["user"].rsplit(":", 1)
         assert gid == "0", name
         # Not the image's own 50000: a deployment that only works as that UID wouldn't on a cluster that assigns one.
@@ -115,6 +119,63 @@ def test_compose_runs_every_container_as_an_arbitrary_non_root_user():
         assert service["security_opt"] == ["no-new-privileges:true"], name
         for port in service.get("ports", []):
             assert port.startswith("127.0.0.1:"), name
+
+
+def test_compose_mounts_the_scratch_data_only_where_it_is_used():
+    with_data = {
+        name for name, service in _compose(COMPOSE).items() if "ngt-data:/ngt-data" in service.get("volumes", [])
+    }
+    assert with_data == {"airflow-init", "airflow-scheduler", "airflow-triggerer", "tools"}
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    "set_up_already, expected",
+    [(False, ["airflow_demo.sh setup"]), (True, ["airflow db migrate"])],
+    ids=["first-up", "later-up"],
+)
+def test_compose_init_only_sets_up_the_scratch_data_once(tmp_path, set_up_already, expected):
+    """It runs on every `up`, next to running services, and sim_setup rewrites files the watchers read."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    called = tmp_path / "called"
+    for tool in ("airflow", "airflow_demo.sh"):
+        path = fake_bin / tool
+        path.write_text(f'#!/bin/sh\necho "{tool} $*" >> "{called}"\n', encoding="utf-8")
+        path.chmod(0o755)
+    if set_up_already:
+        (tmp_path / "env.sh").touch()
+    command = _compose(COMPOSE)["airflow-init"]["command"]
+    assert command[:2] == ["bash", "-c"]
+
+    subprocess.run(
+        ["bash", "-c", command[2].replace("$$", "$")],
+        env={"PATH": f"{fake_bin}:/usr/bin:/bin", "NGT_DEV_HOME": str(tmp_path)},
+        check=True,
+    )
+
+    assert called.read_text(encoding="utf-8").split("\n")[:-1] == expected
+
+
+def test_compose_shares_the_secrets_all_components_must_agree_on():
+    text = COMPOSE.read_text(encoding="utf-8")
+    for setting in ("AIRFLOW__API_AUTH__JWT_SECRET", "AIRFLOW__API__SECRET_KEY", "AIRFLOW__CORE__FERNET_KEY"):
+        # From the generated .env, never a default that'd end up the same for every instance.
+        assert re.search(rf"{setting}: \$\{{\w+:\?", text), setting
+
+
+def _case_labels(script):
+    """The commands of a script's top-level dispatch: the last `case "${1:-}" in` block."""
+    block = script.read_text(encoding="utf-8").rsplit('case "${1:-}" in', 1)[1]
+    labels = re.findall(r"^  ([a-z|-]+)\)", block, flags=re.MULTILINE)
+    return {label for group in labels for label in group.split("|")}
+
+
+def test_compose_script_covers_every_demo_command():
+    own_lifecycle = {"start", "stop", "status", "ui", "logs"}
+    setup_runs_in_airflow_init = {"setup"}
+    assert _case_labels(AIRFLOW_DEMO) - own_lifecycle - setup_runs_in_airflow_init <= _case_labels(COMPOSE_SH)
+    assert own_lifecycle <= _case_labels(COMPOSE_SH)
 
 
 def test_image_runs_as_a_numeric_user():
@@ -180,3 +241,34 @@ def test_demo_script_sets_up_in_a_container_without_venv_or_psql(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert called.read_text(encoding="utf-8").split("\n")[:-1] == ["airflow db migrate"]
     assert (dev_home / "env.sh").is_file()
+
+
+@needs_bash
+def test_compose_script_writes_its_secrets_once_and_owner_only(tmp_path):
+    """Regenerating them would orphan what the database volume has encrypted with the Fernet key."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake_bin / "docker").chmod(0o755)
+    (fake_bin / "python3").symlink_to(sys.executable)
+    env_file = tmp_path / "secrets.env"
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "NGT_SKIP_LOCAL_ENV": "1",
+        "NGT_COMPOSE_ENV_FILE": str(env_file),
+    }
+
+    first = subprocess.run(["bash", str(COMPOSE_SH), "status"], env=env, capture_output=True, text=True, check=False)
+    assert first.returncode == 0, first.stdout + first.stderr
+    written = env_file.read_text(encoding="utf-8")
+    assert {line.split("=")[0] for line in written.splitlines() if "=" in line} == {
+        "NGT_POSTGRES_PASSWORD",
+        "NGT_JWT_SECRET",
+        "NGT_API_SECRET_KEY",
+        "NGT_FERNET_KEY",
+    }
+    assert env_file.stat().st_mode & 0o077 == 0
+
+    subprocess.run(["bash", str(COMPOSE_SH), "status"], env=env, capture_output=True, text=True, check=True)
+    assert env_file.read_text(encoding="utf-8") == written

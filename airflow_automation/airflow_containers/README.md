@@ -4,15 +4,50 @@ For anyone who wants the prototype running somewhere other than their own WSL: a
 someone showing its UI to other people from a Kubernetes cluster. You need a shell; no Airflow or Kubernetes
 experience is assumed.
 
-Both run the same thing as `airflow_demo.sh` on a bare host (see the repo's README.md): the real
+All of these run the same thing as `airflow_demo.sh` on a bare host (see the repo's README.md): the real
 Airflow DAGs against the fake OMS/EOS/CMSSW toolchain. No real data, no real uploads.
 
 | You want to... | Use | Needs |
 |---|---|---|
 | Develop DAGs and tests quickly, no image builds | [`../airflow_demo/airflow_demo.sh`](../airflow_demo/airflow_demo.sh) | Airflow venv, Postgres, tmux |
+| Run it with one container per Airflow component, as production would | [Separate containers](#separate-containers-on-one-machine) (`compose/`) | Docker with Compose v2 |
 | Show the UI to other people, with the least effort | [One pod on Kubernetes](#one-pod-on-kubernetes) (`onepod/`) | a Kubernetes cluster, `kubectl`, Docker |
 
-Both come from one image, [`Dockerfile`](Dockerfile): Airflow 3.3.1 plus this repo at `/opt/ngt`.
+All of them come from one image, [`Dockerfile`](Dockerfile): Airflow 3.3.1 plus this repo at `/opt/ngt`.
+
+## Separate containers, on one machine
+
+API server, scheduler, dag-processor and triggerer each in their own container, plus Postgres and a one-shot
+init: the layout Airflow's deployment docs describe. It's Airflow's own `docker-compose.yaml` trimmed to
+LocalExecutor (no Redis or Celery workers, which only exist to spread tasks over several machines).
+
+```bash
+# Everything from nothing: builds the image, starts it all, plays the scenario, checks its result.
+./airflow_automation/airflow_containers/compose/airflow_compose.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
+
+./airflow_automation/airflow_containers/compose/airflow_compose.sh ui      # the UI's address; no login needed
+./airflow_automation/airflow_containers/compose/airflow_compose.sh down    # remove everything, volumes too
+```
+
+`airflow_compose.sh` takes the same commands as `airflow_demo.sh`, and adds `build`, `down` and `shell`. Run it
+with no arguments for the list. Two things to know:
+
+- **The code is in the image**, so after changing it: `build`, then `start`. Scenario files are the exception:
+  `play` takes one from anywhere on your machine, as is.
+- **A guided walkthrough** is `play <scenario> --interactive --monitor`, the same as on a bare host.
+  `--monitor` keeps watching after the scenario ends, until you press Enter or Ctrl-C.
+
+Every container runs the strictest way a Kubernetes cluster can run it, an arbitrary non-root user with no
+capabilities, and mounts only what its component needs: so if it works here, those two ways it could fail on a
+cluster are already ruled out. The UI is published on `127.0.0.1` only, since it has no login by default. For
+real logins, set `NGT_AIRFLOW_ALL_ADMINS=False` and read them with `airflow_compose.sh logins`.
+
+Per-checkout settings work as for `airflow_demo.sh`: several checkouts get separate stacks, and the settings that
+exist only here go in `local_airflow_env.sh` too (see its `.example`). The generated secrets are in `compose/.env`
+(gitignored): don't delete it while a stack's volumes exist, because the database's contents depend on it.
+
+Tests: `pytest tests/airflow-ngt/test_airflow_containers.py` needs no Docker; `pytest -m container` plays a
+scenario against this stack and against the one-pod emulation, in a few minutes.
 
 ## One pod on Kubernetes
 
