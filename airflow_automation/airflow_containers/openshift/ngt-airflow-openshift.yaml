@@ -1,0 +1,45 @@
+# What CERN's OpenShift adds to ../onepod: an in-cluster image build and a Route. See README.md.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ngt-airflow
+---
+# `oc start-build ngt-airflow --from-repo=. --follow`, from a checkout of this repo.
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ngt-airflow
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: airflow_automation/airflow_containers/Dockerfile
+      buildArgs:
+        - name: AIRFLOW_BASE_IMAGE
+          # CERN's pull-through cache of Docker Hub, which rate-limits a cluster's shared addresses.
+          value: registry.cern.ch/docker.io/apache/airflow:slim-3.3.1-python3.12
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ngt-airflow:latest
+---
+# Reachable from the CERN network only: that's what a Route without the
+# haproxy.router.openshift.io/ip_whitelist annotation gets on CERN's clusters, by the platform
+# inserting one with CERN's ranges. Setting it to '' would open the UI to the whole Internet -- don't.
+# No spec.host: the name defaults to ngt-airflow-<project>.app.cern.ch; set one to choose another
+# under app.cern.ch, web.cern.ch or docs.cern.ch.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ngt-airflow
+spec:
+  to:
+    kind: Service
+    name: ngt-airflow
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

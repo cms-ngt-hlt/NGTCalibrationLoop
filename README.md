@@ -348,6 +348,9 @@ The same mocks as above apply, except that job launches are intercepted one leve
   run as an arbitrary user, that the UI stays closed, and how `airflow_demo.sh` behaves inside a container. Its slow
   counterpart, `test_containers_live.py`, is deselected by default (`pytest -m container`, needs Docker): it plays
   a scenario against both deployments.
+- `tests/airflow-ngt/test_airflow_openshift.py` -- the OpenShift example without a cluster: that what `oc apply -k`
+  creates asks for nothing the restricted SCC would reject, fits a project's default quota, and that its Route
+  stays CERN-only. The tests that render the overlay skip without `kubectl`.
 
 ## The offline simulator (`scenario-player/`)
 

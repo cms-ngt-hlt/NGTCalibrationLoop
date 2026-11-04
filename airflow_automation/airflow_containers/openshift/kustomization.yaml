@@ -1,0 +1,29 @@
+# ../onepod as it runs on CERN's OpenShift, for `oc apply -k`: see README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../onepod
+  - ngt-airflow-openshift.yaml
+images:
+  # CERN's pull-through cache of Docker Hub, which rate-limits a cluster's shared addresses.
+  - name: postgres
+    newName: registry.cern.ch/docker.io/library/postgres
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ngt-airflow
+        annotations:
+          # Resolves the airflow container's image to the ImageStream's, and rolls out every new build.
+          image.openshift.io/triggers: >-
+            [{"from":{"kind":"ImageStreamTag","name":"ngt-airflow:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"airflow\")].image"}]
+      spec:
+        template:
+          spec:
+            containers:
+              - name: postgres
+                securityContext:
+                  # The restricted SCC assigns the UID from the project's own range, and rejects
+                  # any other. The image is built to work with whichever it gets.
+                  runAsUser: null
