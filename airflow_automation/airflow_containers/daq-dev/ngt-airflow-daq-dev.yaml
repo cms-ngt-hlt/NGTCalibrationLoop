@@ -1,0 +1,34 @@
+# What daq-dev needs on top of ../onepod, besides the settings in kustomization.yaml.
+#
+# The pod's own ServiceAccount. Nothing in the pod talks to Kubernetes, so it gets no API token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ngt-airflow
+automountServiceAccountToken: false
+---
+# The UI at https://ngt-sakura-airflow.daq-dev.cms.cern.ch, which only resolves inside the CMS network.
+# Hostnames must be under *.daq-dev.cms.cern.ch, whose DNS already points at the cluster's Traefik, and
+# cert-manager signs this one with the CMS Puppet CA (puppet8-ca.cms).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ngt-airflow
+  annotations:
+    cert-manager.io/cluster-issuer: cms-ca-issuer
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [ngt-sakura-airflow.daq-dev.cms.cern.ch]
+      secretName: ngt-airflow-tls  # cert-manager creates it
+  rules:
+    - host: ngt-sakura-airflow.daq-dev.cms.cern.ch
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ngt-airflow
+                port:
+                  name: http

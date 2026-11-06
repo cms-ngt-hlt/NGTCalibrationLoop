@@ -351,6 +351,10 @@ The same mocks as above apply, except that job launches are intercepted one leve
 - `tests/airflow-ngt/test_airflow_openshift.py` -- the OpenShift example without a cluster: that what `oc apply -k`
   creates asks for nothing the restricted SCC would reject, fits a project's default quota, and that its Route
   stays CERN-only. The tests that render the overlay skip without `kubectl`.
+- `tests/airflow-ngt/test_airflow_daq_dev.py` -- the CMS DAQ `daq-dev` example without a cluster: that what
+  `kubectl apply -k` creates keeps to the rules its tenant enforces (registries, namespace prefix, Ingress class and
+  hostnames, the LimitRange), and that the pod passes the checks the cluster's Kyverno policies report. They skip
+  without `kubectl`.
 
 ## The offline simulator (`scenario-player/`)
 
