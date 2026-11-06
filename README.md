@@ -344,8 +344,8 @@ The same mocks as above apply, except that job launches are intercepted one leve
   *is* installed, run `source airflow_automation/airflow_demo/airflow_env.sh` first so
   `import airflow` picks up the right `AIRFLOW_HOME`/DB config.
 - `tests/airflow-ngt/test_airflow_containers.py` -- the container deployments without a container runtime:
-  that the manifest stays plain Kubernetes and meets the `restricted` Pod Security level, that the Compose files
-  run as an arbitrary user, that the one-pod UI is read-only without its login, and how `airflow_demo.sh` behaves inside a container. Its slow
+  that the manifest stays plain Kubernetes and meets the `restricted` Pod Security level, with read-only root
+  filesystems, that the Compose files run as an arbitrary user, that the one-pod UI is read-only without its login, and how `airflow_demo.sh` behaves inside a container. Its slow
   counterpart, `test_containers_live.py`, is deselected by default (`pytest -m container`, needs Docker): it plays
   a scenario against both deployments.
 - `tests/airflow-ngt/test_airflow_openshift.py` -- the OpenShift example without a cluster: that what `oc apply -k`
@@ -704,7 +704,8 @@ image, in two shapes. Its [README](airflow_automation/airflow_containers/README.
   ```
 - **One pod on Kubernetes** (`onepod/`): the quickest way to put the UI on a cluster. All the components in one
   container next to a Postgres sidecar, all state on `emptyDir`s. Anyone who can reach the UI can read it, and changing
-  anything takes a generated Admin login (FAB's). Plain Kubernetes that meets the `restricted` Pod Security level; what
+  anything takes a generated Admin login (FAB's). Plain Kubernetes that meets the `restricted` Pod Security level, with
+  read-only root filesystems; what
   depends on the cluster, such as how the image gets there and how the UI gets exposed, goes on top as a kustomize overlay.
 - **On CERN's OpenShift** (`openshift/`): a worked example of such an overlay, with its own tutorial: an in-cluster
   image build and a Route reachable from the CERN network only. Not yet run on the real cluster.

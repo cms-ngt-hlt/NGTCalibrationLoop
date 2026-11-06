@@ -96,9 +96,13 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+            # Everything it writes is on the emptyDirs below.
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: ngt-data
               mountPath: /ngt-data
+            - name: airflow-tmp
+              mountPath: /tmp
         - name: postgres
           image: postgres:16
           args: ["-c", "listen_addresses=localhost"]
@@ -123,22 +127,49 @@ spec:
             exec:
               command: ["pg_isready", "-h", "localhost", "-U", "airflow", "-d", "airflow"]
             periodSeconds: 5
+          # Restarts a server that hangs. Generous, as a first start's initdb has to fit in it, and a
+          # restart would only start that over. Not quite the readiness check, as policy engines flag
+          # two identical probes. As airflow all the same: pg_isready would otherwise ask for a role
+          # named after the OS user, which doesn't exist, and the server would log a FATAL each time.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           securityContext:
             # The image's own user is root, which runAsNonRoot refuses. This is its postgres user.
             runAsUser: 999
             allowPrivilegeEscalation: false
             capabilities:
               drop: [ALL]
+            readOnlyRootFilesystem: true
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            # The server's socket and lock file.
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            # Where the image's entrypoint writes a passwd entry for a UID it doesn't know.
+            - name: postgres-tmp
+              mountPath: /tmp
       volumes:
         - name: ngt-data
           emptyDir:
             sizeLimit: 2Gi
+        - name: airflow-tmp
+          emptyDir:
+            sizeLimit: 256Mi
         - name: postgres-data
           emptyDir:
             sizeLimit: 1Gi
+        - name: postgres-run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: postgres-tmp
+          emptyDir:
+            sizeLimit: 16Mi
 ---
 apiVersion: v1
 kind: Service

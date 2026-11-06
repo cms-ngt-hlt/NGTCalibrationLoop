@@ -59,7 +59,8 @@ it. It's a demo with fake data, not a way to run the real pipeline.
 
 [`onepod/ngt-airflow-onepod.yaml`](onepod/ngt-airflow-onepod.yaml) is plain Kubernetes, a Deployment and a Service,
 and meets the `restricted` [Pod Security level](https://kubernetes.io/docs/concepts/security/pod-security-standards/).
-What depends on your cluster is left to you: how the image gets there, and how the UI gets exposed.
+Its root filesystems are read-only: whatever it writes goes to its emptyDirs. What depends on your cluster is left to
+you: how the image gets there, and how the UI gets exposed.
 
 > **Status:** verified on Docker and on a Kubernetes (kind) cluster enforcing that level, with a scenario played.
 

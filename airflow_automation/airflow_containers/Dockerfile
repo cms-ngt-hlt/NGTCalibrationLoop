@@ -35,8 +35,14 @@ RUN mkdir -p /ngt-data && chown airflow:root /ngt-data && chmod 2775 /ngt-data \
 # The airflow user, by number as in Airflow's own image: a cluster can't check runAsNonRoot on a name.
 USER 50000
 
+# Airflow refuses to run as a user without a name, and finds itself under $HOME/.local. An arbitrary
+# UID has neither, unless Airflow's entrypoint can add it to /etc/passwd, which a read-only root
+# filesystem rules out, and which never reaches what `kubectl exec` starts anyway. Python takes both from
+# here instead.
 # NGT_DEV_HOME is a subdirectory, not the mount point itself: sim_reset deletes it.
-ENV NGT_AIRFLOW_IN_CONTAINER=1 \
+ENV HOME=/home/airflow \
+    USER=airflow \
+    NGT_AIRFLOW_IN_CONTAINER=1 \
     NGT_SIM_STUB_INSTALLED=1 \
     NGT_DEV_HOME=/ngt-data/demo-env \
     AIRFLOW__CORE__DAGS_FOLDER=/opt/ngt/airflow_automation/airflow_dags \

@@ -71,6 +71,34 @@ def test_pod_meets_the_restricted_pod_security_level():
     assert "hostPath" not in ONEPOD_MANIFEST.read_text(encoding="utf-8")
 
 
+def test_pod_writes_only_to_its_emptydirs_each_of_limited_size():
+    # As policy engines' best practices ask, e.g. Kyverno's require-ro-rootfs.
+    volumes = {v["name"]: v for v in _pod_spec()["volumes"]}
+    for container in _pod_spec()["containers"]:
+        assert container["securityContext"]["readOnlyRootFilesystem"] is True, container["name"]
+        for mount in container["volumeMounts"]:
+            assert volumes[mount["name"]]["emptyDir"]["sizeLimit"], mount["name"]
+
+
+def _check(probe):
+    return {kind: probe[kind] for kind in ("exec", "httpGet", "tcpSocket", "grpc") if kind in probe}
+
+
+def test_pod_restarts_and_unreadies_each_container_on_checks_of_its_own():
+    for container in _pod_spec()["containers"]:
+        # Policy engines flag a liveness probe that's the same check as the readiness one.
+        assert _check(container["livenessProbe"]) != _check(container["readinessProbe"]), container["name"]
+
+
+def test_postgres_probes_connect_as_its_own_user():
+    # Without -U, pg_isready asks for a role named after the OS user: a FATAL in the server's log on every probe.
+    postgres = _container("postgres")
+    user = next(e["value"] for e in postgres["env"] if e["name"] == "POSTGRES_USER")
+    for probe in ("readinessProbe", "livenessProbe"):
+        command = postgres[probe]["exec"]["command"]
+        assert command[command.index("-U") + 1] == user, probe
+
+
 def test_pod_fixes_a_uid_only_where_the_image_would_run_as_root():
     # runAsNonRoot refuses postgres' USER root. The Airflow image has a numeric user of its own.
     assert _container("postgres")["securityContext"]["runAsUser"] == 999
@@ -174,6 +202,10 @@ def test_local_emulation_of_the_pod_matches_the_manifest():
     assert services["postgres"]["command"] == _container("postgres")["args"]
     assert services["airflow"]["network_mode"] == "service:postgres"
     assert services["postgres"]["ports"] == ["127.0.0.1:${NGT_ONEPOD_PORT:-8099}:8080"]
+    for name, service in services.items():
+        assert service["read_only"] is True, name
+        writable = {volume.split(":", 1)[1] for volume in service["volumes"]} | set(service.get("tmpfs", []))
+        assert writable == {mount["mountPath"] for mount in _container(name)["volumeMounts"]}, name
 
 
 @pytest.mark.parametrize("path", [ONEPOD_COMPOSE, COMPOSE], ids=["onepod", "compose"])
@@ -250,6 +282,13 @@ def test_image_runs_as_a_numeric_user():
     # A cluster can't check runAsNonRoot on a name: the kubelet refuses to start the container.
     dockerfile = (CONTAINERS / "Dockerfile").read_text(encoding="utf-8")
     assert re.findall(r"^USER (\S+)", dockerfile, flags=re.MULTILINE)[-1].isdigit()
+
+
+def test_image_runs_as_a_uid_without_a_passwd_entry():
+    # Airflow refuses a user without a name, and is installed under $HOME. Neither may depend on
+    # /etc/passwd, which a read-only root filesystem keeps the entrypoint from adding an arbitrary UID to.
+    dockerfile = (CONTAINERS / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r"^ENV HOME=/home/airflow \\\n    USER=airflow \\$", dockerfile, flags=re.MULTILINE)
 
 
 def test_image_context_keeps_a_checkouts_own_state_out():

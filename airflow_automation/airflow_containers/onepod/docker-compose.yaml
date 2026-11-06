@@ -1,7 +1,8 @@
 # ngt-airflow-onepod.yaml's pod on one Docker host, to try it before deploying it: the same two
 # containers and settings (tests/airflow-ngt/test_airflow_containers.py keeps them the same), the
-# strictest way a cluster can run them (an arbitrary non-root UID), one network namespace like a
-# pod's, and throwaway volumes standing in for the emptyDirs. See ../README.md.
+# strictest way a cluster can run them (an arbitrary non-root UID, read-only root filesystems), one
+# network namespace like a pod's, and throwaway volumes and tmpfs standing in for the emptyDirs. See
+# ../README.md.
 services:
   postgres:
     image: postgres:16
@@ -9,6 +10,7 @@ services:
     user: "1000650000:0"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    read_only: true
     environment:
       POSTGRES_USER: airflow
       POSTGRES_DB: airflow
@@ -16,6 +18,7 @@ services:
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    tmpfs: [/var/run/postgresql, /tmp]
     # This container owns the network namespace, so what the pod exposes is published here.
     ports:
       - "127.0.0.1:${NGT_ONEPOD_PORT:-8099}:8080"
@@ -30,6 +33,7 @@ services:
     user: "1000650000:0"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    read_only: true
     environment:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow@localhost:5432/airflow
       AIRFLOW_HOME: /ngt-data/airflow-home
@@ -40,6 +44,7 @@ services:
       NGT_RUN_END_GRACE_SECONDS: "20"
     volumes:
       - ngt-data:/ngt-data
+    tmpfs: [/tmp]
     depends_on:
       - postgres
 
