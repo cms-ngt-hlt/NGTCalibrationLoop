@@ -145,8 +145,7 @@ The other scenarios are in `scenario-player/scenarios/`; the image has its own c
 **Reset between scenarios.** A run number works once per pod (the watchers remember it). And each calibration's file
 watcher serves only its highest open run, where a run with a file still retrying counts as open. The scenarios' run
 numbers aren't in order, so one played right after a scenario with faults can get nothing for that calibration until
-the retries are over, many minutes later, and fail its expectations: `sequential_runs` after
-`partial_to_total_fault_injection_demo` does.
+the retries are over, many minutes later, and fail its expectations.
 
 ### 5. Reset, stop, remove
 
