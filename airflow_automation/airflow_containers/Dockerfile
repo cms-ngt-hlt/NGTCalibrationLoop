@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" apache-airfl
 # pip check makes sure of. uv and prek (a pre-commit runner, with a uv of its own) only build and lint;
 # nothing in a container runs them.
 RUN pip install --no-cache-dir PyJWT==2.15.0 certifi==2026.10.18 dnspython==2.9.0 Mako==1.4.2 \
-      msgpack==1.2.3 sqlparse==0.6.0 urllib3==2.8.0 Werkzeug==3.1.9 pip==26.2.0 \
+      msgpack==1.2.3 sqlparse==0.6.0 urllib3==2.8.0 Werkzeug==3.1.9 \
     && pip uninstall --yes uv \
     && rm -rf "${HOME}/.local/share/uv" "${HOME}/.local/bin/prek" \
     && pip check
@@ -36,22 +36,28 @@ RUN pip install --no-cache-dir --no-deps /opt/ngt/tests/stubs
 
 USER root
 # Without the clients Airflow's image installs for other uses, which nothing here runs, and which bring
-# most of the vulnerabilities without a fix yet: ssh, rsync, git, wget, sudo, the MariaDB, SQLite (the
-# library stays, for Python's sqlite3), LDAP and MS ODBC clients, the Docker CLI, and the libraries only
-# they link. Not apt's autoremove: dpkg doesn't know what Airflow's own Python links (libexpat1, ncurses).
-# Debian's sudo refuses to go while root has no password, unless forced.
+# most of the vulnerabilities without a fix yet: ssh, rsync, git, wget, sudo, GnuPG (apt checks signatures
+# with gpgv, which stays), the MariaDB, SQLite, LDAP and MS ODBC clients, the Docker CLI, and the libraries
+# only they link. SQLite's library too: Python's sqlite3 needs it, but Airflow only imports that for a
+# SQLite database, and every container here has Postgres (without a database URL, Airflow defaults to
+# SQLite and stops at that import). Not apt's autoremove: dpkg doesn't know what Airflow's own Python
+# links (libexpat1, ncurses). Debian's sudo refuses to go while root has no password, unless forced.
 RUN SUDO_FORCE_REMOVE=yes apt-get purge --yes openssh-client libfido2-1 libcbor0.8 rsync libpopt0 git \
-      git-man liberror-perl libcurl3-gnutls wget sudo sqlite3 ldap-utils mariadb-client \
-      mariadb-client-core libmariadb3 libmariadb3-compat mariadb-common mysql-common \
-      libconfig-inifiles-perl libedit2 msodbcsql18 unixodbc odbcinst libodbcinst2 unixodbc-common \
-      docker-ce-cli \
+      git-man liberror-perl libcurl3-gnutls wget sudo gnupg gnupg2 gnupg-l10n gnupg-utils gpg gpg-agent \
+      gpg-wks-client gpg-wks-server gpgconf gpgsm dirmngr pinentry-curses libassuan0 libksba8 libnpth0 \
+      sqlite3 libsqlite3-0 ldap-utils mariadb-client mariadb-client-core libmariadb3 libmariadb3-compat \
+      mariadb-common mysql-common libconfig-inifiles-perl libedit2 msodbcsql18 unixodbc odbcinst \
+      libodbcinst2 unixodbc-common docker-ce-cli \
     && rm /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/mariadb.list \
       /etc/apt/sources.list.d/mssql-release.list
-# Debian's security updates since Airflow built its image, and the pip of the bare interpreter (Airflow
-# runs in a venv, ~airflow/.local, with a pip of its own). Only a build that doesn't reuse this layer
+# Debian's security updates since Airflow built its image. Only a build that doesn't reuse this layer
 # from its cache (--no-cache) picks up later ones.
-RUN apt-get update && apt-get upgrade --yes && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && /usr/python/bin/python3 -m pip install --no-cache-dir --root-user-action=ignore pip==26.2.0
+RUN apt-get update && apt-get upgrade --yes && apt-get clean && rm -rf /var/lib/apt/lists/*
+# No pip, in Airflow's venv (~airflow/.local) or in the bare interpreter: nothing in a container installs
+# anything (Airflow's /entrypoint only would, for _PIP_ADDITIONAL_REQUIREMENTS), and pip bundles its own
+# certifi, urllib3, msgpack and setuptools, older than the fixed ones.
+RUN /usr/python/bin/python3 -m pip uninstall --yes --root-user-action=ignore pip \
+    && /home/airflow/.local/bin/python -m pip uninstall --yes --root-user-action=ignore pip
 # A cluster may run a container as an arbitrary UID with GID 0 (OpenShift does), so everything the
 # image's processes write to has to be writable by group 0 (the setgid keeps it that way for what
 # they create), and everything they run must not depend on being UID 50000. Same reasoning as
