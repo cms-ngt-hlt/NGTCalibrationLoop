@@ -17,11 +17,11 @@ documentation is the [CMS DAQ sysadmins' public docs](https://gitlab.cern.ch/cms
   the login's cookies are set to https only.
 - **Its own ServiceAccount and the labels the cluster asks for**, which its Kyverno policies check.
 
-> **Status:** not yet run on `daq-dev`. Checked on 2026-11-06 against the cluster, read-only: the rules below come from
-> the tenant's own settings and from the policy report of a test pod. The rendered overlay passes Kyverno's upstream
-> versions of those policies, and plays a scenario on a local Kubernetes (kind) enforcing the `restricted` Pod Security
-> level, under the same image names. The Harbor project and the push are the steps most likely to need adjusting. If a
-> step differs in reality, please correct this page.
+> **Status:** deployed on `daq-dev` on 2026-11-07, following this page, with the image `3.3.1-1`. Both containers became
+> ready with no restarts. Postgres came through Harbor's cache as in step 3. The certificate came from the cluster's
+> cert-manager, and the UI and Airflow's health check answered through the Ingress. Its policy report differed from what
+> this page first expected, and step 5 now says what it showed. The rules below come from the tenant's own settings, read
+> on 2026-11-06. If a step differs for you, please correct this page.
 
 ## Before you start
 
@@ -122,13 +122,15 @@ kubectl get pods                             # 2/2 Running
 kubectl get policyreport
 ```
 
-The cluster's Kyverno policies only report for now, but will block on staging and production. Expect one warning and
-one error, both known, on every object that holds the pod's spec:
+The cluster's Kyverno policies only report for now, but will block on staging and production. Expect a warning and a
+failure, both known:
 
-- **`forbid-cpu-limits`**, a warning. The pod keeps its CPU limits on purpose: the tenant gives a container without one
-  a limit of 1 CPU anyway, which would halve Airflow's.
-- **`block-large-images`**, an error. Kyverno can't check the image's size, because it doesn't trust Harbor's
-  certificate. That's for the sysadmins.
+- **`forbid-cpu-limits`**, a warning, on every object that holds the pod's spec. The pod keeps its CPU limits on purpose:
+  the tenant gives a container without one a limit of 1 CPU anyway, which would halve Airflow's.
+- **`restrict-emptydir-sizelimit`**, a failure on the Pod: the cluster wants every `emptyDir` under 400Mi, and this pod
+  keeps its database (1Gi) and its data (2Gi) on `emptyDir`s. Smaller ones would have to be measured first.
+- **`block-large-images`** can show an error instead of a result, when Kyverno fails to read the image from Harbor, as
+  it did for a test pod on 2026-11-06. That's for the sysadmins.
 
 Anything else is new, and worth fixing here.
 
@@ -168,7 +170,7 @@ kubectl delete namespace ngt-sakura-airflow    # remove everything, the Secret a
 
 | What you see | Likely cause | What to do |
 |---|---|---|
-| `invalid character '<' looking for beginning of value` | Something other than the API answered, e.g. a context with no `cluster`, which sends `kubectl` to `localhost:8080` | `kubectl config view`: each context names its cluster, each cluster has the tunnel's `proxy-url` |
+| `invalid character '<' looking for beginning of value`, or `failed to download openapi: proto: cannot parse invalid wire-format data` | Something other than the API answered: `kubectl` went to `localhost:8080`, because this shell has no `KUBECONFIG` (a new terminal, a restarted WSL), or a context has no `cluster` | Step 1's `export KUBECONFIG=...` again; `kubectl config current-context`; `kubectl config view`: each context names its cluster, each cluster has the tunnel's `proxy-url` |
 | `proxyconnect tcp: ... connection refused` | The tunnel is down, or on another port | Step 1's `ssh -D` |
 | `Unauthorized`, after some weeks | The kubeconfig's token expired (30 days) | Download it again, and redo step 1 |
 | 403 on `kubectl get ns` | The `-fqdn` context doesn't list cluster-wide | Use the `daq-dev` context for that |

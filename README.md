@@ -714,7 +714,7 @@ image, in two shapes. Its [README](airflow_automation/airflow_containers/README.
 - **On CERN's OpenShift** (`openshift/`): a worked example of such an overlay, with its own tutorial: an in-cluster
   image build and a Route reachable from the CERN network only. Not yet run on the real cluster.
 - **On CMS DAQ's `daq-dev` cluster** (`daq-dev/`): another, with its own tutorial: images from the CMS Harbor, pushed
-  through a SOCKS tunnel, and an Ingress reachable from the CMS network only. Not yet run on the real cluster.
+  through a SOCKS tunnel, and an Ingress reachable from the CMS network only. Deployed there on 2026-11-07.
 
 The image works as an arbitrary non-root user with no capabilities, the strictest way a cluster can run it, and the
 Compose files run it that way. None of this changes what "Deploying on the calibration nodes" above says about the
