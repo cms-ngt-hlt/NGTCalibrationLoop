@@ -31,7 +31,8 @@ COPY --chown=airflow:root tests/stubs/ /opt/ngt/tests/stubs/
 
 # A plain install rather than the editable one sim_setup makes: the code never changes in an image,
 # and it has to be importable where $NGT_DEV_HOME/env.sh (and so PYTHONPATH) isn't, in a container
-# that doesn't mount the scratch volume. sim_setup skips its own (NGT_SIM_STUB_INSTALLED).
+# that doesn't mount the scratch volume. sim_setup skips its own (NGT_SIM_STUB_INSTALLED). It imports
+# scenario-player's faults.py, which env.sh puts on PYTHONPATH: the image does so too, below.
 RUN pip install --no-cache-dir --no-deps /opt/ngt/tests/stubs
 
 USER root
@@ -79,7 +80,7 @@ ENV HOME=/home/airflow \
     NGT_SIM_STUB_INSTALLED=1 \
     NGT_DEV_HOME=/ngt-data/demo-env \
     AIRFLOW__CORE__DAGS_FOLDER=/opt/ngt/airflow_automation/airflow_dags \
-    PYTHONPATH=/opt/ngt:/opt/ngt/airflow_automation \
+    PYTHONPATH=/opt/ngt:/opt/ngt/airflow_automation:/opt/ngt/scenario-player \
     PATH=/opt/ngt/airflow_automation/airflow_demo:${PATH}
 
 WORKDIR /opt/ngt

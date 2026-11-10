@@ -303,6 +303,15 @@ def test_image_context_keeps_a_checkouts_own_state_out():
     assert all((REPO_ROOT / source).is_dir() for source in copied)
 
 
+def test_image_imports_the_fake_omsapi_without_the_fake_data():
+    # The stub imports scenario-player's faults.py, which env.sh puts on PYTHONPATH. A container without the fake
+    # data, like Compose's dag-processor, has no env.sh, and the DAGs import the stub: the image puts it there too.
+    stub = (REPO_ROOT / "tests" / "stubs" / "omsapi" / "__init__.py").read_text(encoding="utf-8")
+    assert re.search(r"^import faults\b", stub, flags=re.MULTILINE)
+    dockerfile = (CONTAINERS / "Dockerfile").read_text(encoding="utf-8")
+    assert "/opt/ngt/scenario-player" in re.search(r"PYTHONPATH=(\S+)", dockerfile).group(1).split(":")
+
+
 @needs_bash
 @pytest.mark.parametrize("command", ["start", "stop", "status", "ui", "logs"])
 def test_demo_script_leaves_process_management_to_the_container_runtime(command):
