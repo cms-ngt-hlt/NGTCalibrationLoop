@@ -1,220 +1,252 @@
-# The Airflow prototype with one pod per Airflow component, on any Kubernetes cluster, from Airflow's own Helm chart:
+# The Airflow prototype with one pod per Airflow component, on any Kubernetes cluster: Airflow's own Helm chart, as this
+# chart's dependency, plus what it doesn't deploy (templates/): Postgres on a persistent volume, as the chart's
+# production guide advises a database of your own; the volumes the components share; a pod to drive the demo from; and
+# the script that sets it all up. post-renderer/ changes the two things in Airflow's output its values can't.
 #
-#   kubectl apply -k extras/
-#   helm plugin install post-renderer/    # once
-#   helm install ngt apache-airflow/airflow --version 1.22.0 -f values.yaml [-f <your cluster's values>] \
-#     --post-renderer ngt-airflow-patches
+#   helm dependency build multipod-helm/                    # once: Airflow's chart into charts/
+#   helm plugin install multipod-helm/post-renderer         # once per machine
+#   helm install ngt multipod-helm/ [-f <your cluster's values>] --post-renderer ngt-airflow-patches
 #
-# extras/ holds what the chart doesn't: Postgres on a persistent volume (the chart's production guide advises a database
-# of your own), the volumes the components share, a pod to drive the demo from, and the script that sets it all up.
-# post-renderer/ changes the two things in the chart's output its values can't. The release name must be `ngt`: extras/,
-# post-renderer/ and ../README.md expect it. Any namespace works, and several at once. How to deploy it: ../README.md.
-airflowVersion: "3.3.1"
-images:
-  airflow:
-    repository: ngt-airflow  # a placeholder for your own build, as in ../onepod
-    tag: dev
-  # The scheduler's setup migrates the database, and the first time also sets up the fake data: the others wait.
-  migrationsWaitTimeout: 600
-executor: LocalExecutor
+# The release name must be `ngt`: post-renderer/ and ../README.md expect the names Airflow's chart then gives its
+# objects. Any namespace works, and several at once. How to deploy it: ../README.md.
 
-# One Secret, ngt-airflow, created by you once (see ../README.md): static, as the chart's production guide asks, and
-# shared by every component.
-data:
-  metadataSecretName: ngt-airflow
-fernetKeySecretName: ngt-airflow
-apiSecretKeySecretName: ngt-airflow
-jwtSecretName: ngt-airflow
-
-# The database is in extras/. Redis, StatsD and PgBouncer serve executors and scales this doesn't have.
-postgresql:
-  enabled: false
-redis:
-  enabled: false
-statsd:
-  enabled: false
-pgbouncer:
-  enabled: false
-# No Jobs: the scheduler's setup (extras/init_multipod.sh) migrates and makes the admin login, with the password from
-# the Secret, not from these values.
-migrateDatabaseJob:
-  enabled: false
-  serviceAccount:
-    create: false
-createUserJob:
-  enabled: false
-  serviceAccount:
-    create: false
-
-# A Service named ngt-airflow* would set NGT_AIRFLOW_*_PORT in every pod, which airflow_env.sh takes for its own.
-enableServiceLinks: false
-# LocalExecutor never talks to Kubernetes.
-rbac:
-  create: false
-workers:
-  celery:
-    persistence:
-      # Otherwise the scheduler becomes a StatefulSet with a log volume of its own.
-      enabled: false
-
-# The restricted Pod Security level, with no fixed UID: the image runs as any.
-securityContexts:
-  pod:
-    runAsNonRoot: true
-    seccompProfile:
-      type: RuntimeDefault
-  containers:
-    allowPrivilegeEscalation: false
-    capabilities:
-      drop: [ALL]
-    readOnlyRootFilesystem: true
-# Where Airflow writes, besides the logs: $AIRFLOW_HOME, whose airflow.cfg and logs the chart mounts on top, and /tmp.
-volumes:
-  - name: airflow-home
-    emptyDir:
-      sizeLimit: 64Mi
-  - name: tmp
-    emptyDir:
-      sizeLimit: 256Mi
-volumeMounts:
-  - name: airflow-home
-    mountPath: /opt/airflow
-  - name: tmp
-    mountPath: /tmp
-
-# Every component writes them, and the API server shows them: on a volume they all share (extras/).
-logs:
-  persistence:
-    enabled: true
-    existingClaim: ngt-airflow-logs
-
-config:
-  core:
-    # Unpaused from the first parse, so the watchers run in a deployment no one has touched yet.
-    dags_are_paused_at_creation: "False"
-    # Keeps LocalExecutor's worker processes within the scheduler's memory limit.
-    parallelism: 8
-  fab:
-    # Anyone who reaches the UI can read it; changing anything takes the admin login.
-    auth_role_public: Viewer
-  dag_processor:
-    refresh_interval: 15
-    min_file_process_interval: 10
-# The one-pod's banner (../onepod/airflow_local_settings.py), the only thing in the UI that leads to the login.
-airflowLocalSettings: |-
-  from airflow.api_fastapi.common.types import UIAlert
-
-  DASHBOARD_UIALERTS = [UIAlert(text="Anyone can look around here. To change anything, [log in](/auth/login/).", category="info")]
-env:
-  # Read at DAG parse time and by the watchers: see ../../airflow_demo/airflow_demo.sh.
-  - name: NGT_RUN_END_GRACE_SECONDS
-    value: "20"
-
-# Resources from what each component used at its peak through four scenarios on kind (scheduler 783 MiB, triggerer
-# 462, dag-processor 353, API server 307; Postgres and tools pod, in extras/, 141 and 134), with room for the
-# `airflow jobs check` liveness probes, which run inside the containers.
-scheduler:
-  # LocalExecutor: tasks run in here, so this is where the fake toolchain's data has to be.
-  extraVolumes:
-    - name: ngt-data
-      persistentVolumeClaim:
-        claimName: ngt-airflow-data
-    - name: ngt-scripts
-      configMap:
-        name: ngt-airflow-scripts
-        defaultMode: 0555
-  extraVolumeMounts:
-    - name: ngt-data
-      mountPath: /ngt-data
-  # Its own setup migrates, so it can't wait for the migrations.
-  waitForMigrations:
-    enabled: false
-  extraInitContainers:
-    - name: setup
-      image: '{{ include "airflow_image" . }}'
-      imagePullPolicy: '{{ .Values.images.airflow.pullPolicy }}'
-      args: ["bash", "/opt/ngt-scripts/init_multipod.sh"]
-      env:
-        - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
-          valueFrom:
-            secretKeyRef: {name: ngt-airflow, key: connection}
-        - name: AIRFLOW__CORE__FERNET_KEY
-          valueFrom:
-            secretKeyRef: {name: ngt-airflow, key: fernet-key}
-        - name: NGT_ADMIN_PASSWORD
-          valueFrom:
-            secretKeyRef: {name: ngt-airflow, key: admin-password}
-      volumeMounts:
-        - {name: airflow-home, mountPath: /opt/airflow}
-        - {name: config, mountPath: /opt/airflow/airflow.cfg, subPath: airflow.cfg, readOnly: true}
-        - {name: logs, mountPath: /opt/airflow/logs}
-        - {name: tmp, mountPath: /tmp}
-        - {name: ngt-data, mountPath: /ngt-data}
-        - {name: ngt-scripts, mountPath: /opt/ngt-scripts, readOnly: true}
-      resources:
-        requests: {cpu: 100m, memory: 256Mi}
-        limits: {cpu: "1", memory: 640Mi}
-      securityContext:
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: [ALL]
-        readOnlyRootFilesystem: true
-  serviceAccount:
-    automountServiceAccountToken: false
-  logGroomerSidecar:
-    enabled: false
-  resources:
-    requests: {cpu: 200m, memory: 512Mi}
-    limits: {cpu: "2", memory: 1Gi}
-
-# Hosts the AssetWatchers, which watch the fake OMS and the run directories.
-triggerer:
-  # Otherwise a StatefulSet with a volume of its own per replica.
-  persistence:
-    enabled: false
-  extraVolumes:
-    - name: ngt-data
-      persistentVolumeClaim:
-        claimName: ngt-airflow-data
-  extraVolumeMounts:
-    - name: ngt-data
-      mountPath: /ngt-data
-  extraInitContainers:
-    - name: wait-for-fake-data
-      image: '{{ include "airflow_image" . }}'
-      imagePullPolicy: '{{ .Values.images.airflow.pullPolicy }}'
-      args: ["bash", "-c", 'until [ -f "$NGT_DEV_HOME/env.sh" ]; do echo "Waiting for the scheduler''s setup..."; sleep 5; done']
-      volumeMounts:
-        - {name: ngt-data, mountPath: /ngt-data}
-      resources:
-        requests: {cpu: 50m, memory: 64Mi}
-        limits: {cpu: 100m, memory: 128Mi}
-      securityContext:
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: [ALL]
-        readOnlyRootFilesystem: true
-  serviceAccount:
-    automountServiceAccountToken: false
-  logGroomerSidecar:
-    enabled: false
-  resources:
-    requests: {cpu: 150m, memory: 384Mi}
-    limits: {cpu: "1", memory: 896Mi}
-
-# Only parses DAGs, so no fake data: ngt_dags_watch.py stays importable without it.
-dagProcessor:
-  serviceAccount:
-    automountServiceAccountToken: false
-  logGroomerSidecar:
-    enabled: false
-  resources:
-    requests: {cpu: 100m, memory: 320Mi}
-    limits: {cpu: "1", memory: 768Mi}
-
-apiServer:
-  serviceAccount:
-    automountServiceAccountToken: false
+# This chart's own objects. Their image, labels and pull Secrets are Airflow's, under airflow: below.
+postgres:
+  image:
+    repository: postgres
+    tag: "16"
+  storage:
+    size: 5Gi
+    accessMode: ReadWriteOnce  # only one node at a time has to reach it
+    storageClassName: ""       # the cluster's default
   resources:
     requests: {cpu: 100m, memory: 256Mi}
-    limits: {cpu: "1", memory: 640Mi}
+    limits: {cpu: "1", memory: 512Mi}
+# The fake OMS/EOS/CMSSW data, which the scheduler's tasks, the triggerer's watchers and the tools pod read and write,
+# and every component's logs, which the API server shows: wherever their pods run, so a class pods on different nodes
+# can share.
+sharedVolumes:
+  data:
+    size: 2Gi
+    accessMode: ReadWriteMany
+    storageClassName: ""
+  logs:
+    size: 2Gi
+    accessMode: ReadWriteMany
+    storageClassName: ""
+tools:
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+# Airflow's chart.
+airflow:
+  airflowVersion: "3.3.1"
+  images:
+    airflow:
+      repository: ngt-airflow  # a placeholder for your own build, as in ../onepod
+      tag: dev
+    # The scheduler's setup migrates the database, and the first time also sets up the fake data: the others wait.
+    migrationsWaitTimeout: 600
+  executor: LocalExecutor
+
+  # One Secret, ngt-airflow, created by you once (see ../README.md): static, as the chart's production guide asks, and
+  # shared by every component.
+  data:
+    metadataSecretName: ngt-airflow
+  fernetKeySecretName: ngt-airflow
+  apiSecretKeySecretName: ngt-airflow
+  jwtSecretName: ngt-airflow
+
+  # The database is this chart's (templates/). Redis, StatsD and PgBouncer serve executors and scales this doesn't have.
+  postgresql:
+    enabled: false
+  redis:
+    enabled: false
+  statsd:
+    enabled: false
+  pgbouncer:
+    enabled: false
+  # No Jobs: the scheduler's setup (files/init_multipod.sh) migrates and makes the admin login, with the password from
+  # the Secret, not from these values.
+  migrateDatabaseJob:
+    enabled: false
+    serviceAccount:
+      create: false
+  createUserJob:
+    enabled: false
+    serviceAccount:
+      create: false
+
+  # A Service named ngt-airflow* would set NGT_AIRFLOW_*_PORT in every pod, which airflow_env.sh takes for its own.
+  enableServiceLinks: false
+  # LocalExecutor never talks to Kubernetes.
+  rbac:
+    create: false
+  workers:
+    celery:
+      persistence:
+        # Otherwise the scheduler becomes a StatefulSet with a log volume of its own.
+        enabled: false
+
+  # The restricted Pod Security level, with no fixed UID: the image runs as any.
+  securityContexts:
+    pod:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
+    containers:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]
+      readOnlyRootFilesystem: true
+  # Where Airflow writes, besides the logs: $AIRFLOW_HOME, whose airflow.cfg and logs the chart mounts on top, and /tmp.
+  volumes:
+    - name: airflow-home
+      emptyDir:
+        sizeLimit: 64Mi
+    - name: tmp
+      emptyDir:
+        sizeLimit: 256Mi
+  volumeMounts:
+    - name: airflow-home
+      mountPath: /opt/airflow
+    - name: tmp
+      mountPath: /tmp
+
+  # Every component writes them, and the API server shows them: on a volume they all share (templates/volumes.yaml).
+  logs:
+    persistence:
+      enabled: true
+      existingClaim: ngt-airflow-logs
+
+  config:
+    core:
+      # Unpaused from the first parse, so the watchers run in a deployment no one has touched yet.
+      dags_are_paused_at_creation: "False"
+      # Keeps LocalExecutor's worker processes within the scheduler's memory limit.
+      parallelism: 8
+    fab:
+      # Anyone who reaches the UI can read it; changing anything takes the admin login.
+      auth_role_public: Viewer
+    dag_processor:
+      refresh_interval: 15
+      min_file_process_interval: 10
+  # The one-pod's banner (../onepod/airflow_local_settings.py), the only thing in the UI that leads to the login.
+  airflowLocalSettings: |-
+    from airflow.api_fastapi.common.types import UIAlert
+
+    DASHBOARD_UIALERTS = [UIAlert(text="Anyone can look around here. To change anything, [log in](/auth/login/).", category="info")]
+  env:
+    # Read at DAG parse time and by the watchers: see ../../airflow_demo/airflow_demo.sh.
+    - name: NGT_RUN_END_GRACE_SECONDS
+      value: "20"
+
+  # Resources from what each component used at its peak through four scenarios on kind (scheduler 783 MiB, triggerer
+  # 462, dag-processor 353, API server 307; Postgres and the tools pod, above, 141 and 134), with room for the
+  # `airflow jobs check` liveness probes, which run inside the containers.
+  scheduler:
+    # LocalExecutor: tasks run in here, so this is where the fake toolchain's data has to be.
+    extraVolumes:
+      - name: ngt-data
+        persistentVolumeClaim:
+          claimName: ngt-airflow-data
+      - name: ngt-scripts
+        configMap:
+          name: ngt-airflow-scripts
+          defaultMode: 0555
+    extraVolumeMounts:
+      - name: ngt-data
+        mountPath: /ngt-data
+    # Its own setup migrates, so it can't wait for the migrations.
+    waitForMigrations:
+      enabled: false
+    extraInitContainers:
+      - name: setup
+        image: '{{ include "airflow_image" . }}'
+        imagePullPolicy: '{{ .Values.images.airflow.pullPolicy }}'
+        args: ["bash", "/opt/ngt-scripts/init_multipod.sh"]
+        env:
+          - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+            valueFrom:
+              secretKeyRef: {name: ngt-airflow, key: connection}
+          - name: AIRFLOW__CORE__FERNET_KEY
+            valueFrom:
+              secretKeyRef: {name: ngt-airflow, key: fernet-key}
+          - name: NGT_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef: {name: ngt-airflow, key: admin-password}
+        volumeMounts:
+          - {name: airflow-home, mountPath: /opt/airflow}
+          - {name: config, mountPath: /opt/airflow/airflow.cfg, subPath: airflow.cfg, readOnly: true}
+          - {name: logs, mountPath: /opt/airflow/logs}
+          - {name: tmp, mountPath: /tmp}
+          - {name: ngt-data, mountPath: /ngt-data}
+          - {name: ngt-scripts, mountPath: /opt/ngt-scripts, readOnly: true}
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+          limits: {cpu: "1", memory: 640Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: true
+    serviceAccount:
+      automountServiceAccountToken: false
+    logGroomerSidecar:
+      enabled: false
+    resources:
+      requests: {cpu: 200m, memory: 512Mi}
+      limits: {cpu: "2", memory: 1Gi}
+
+  # Hosts the AssetWatchers, which watch the fake OMS and the run directories.
+  triggerer:
+    # Otherwise a StatefulSet with a volume of its own per replica.
+    persistence:
+      enabled: false
+    extraVolumes:
+      - name: ngt-data
+        persistentVolumeClaim:
+          claimName: ngt-airflow-data
+    extraVolumeMounts:
+      - name: ngt-data
+        mountPath: /ngt-data
+    extraInitContainers:
+      - name: wait-for-fake-data
+        image: '{{ include "airflow_image" . }}'
+        imagePullPolicy: '{{ .Values.images.airflow.pullPolicy }}'
+        args: ["bash", "-c", 'until [ -f "$NGT_DEV_HOME/env.sh" ]; do echo "Waiting for the scheduler''s setup..."; sleep 5; done']
+        volumeMounts:
+          - {name: ngt-data, mountPath: /ngt-data}
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 100m, memory: 128Mi}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: true
+    serviceAccount:
+      automountServiceAccountToken: false
+    logGroomerSidecar:
+      enabled: false
+    resources:
+      requests: {cpu: 150m, memory: 384Mi}
+      limits: {cpu: "1", memory: 896Mi}
+
+  # Only parses DAGs, so no fake data: ngt_dags_watch.py stays importable without it.
+  dagProcessor:
+    serviceAccount:
+      automountServiceAccountToken: false
+    logGroomerSidecar:
+      enabled: false
+    resources:
+      requests: {cpu: 100m, memory: 320Mi}
+      limits: {cpu: "1", memory: 768Mi}
+
+  apiServer:
+    serviceAccount:
+      automountServiceAccountToken: false
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 640Mi}

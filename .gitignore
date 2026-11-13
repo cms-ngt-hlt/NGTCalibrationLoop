@@ -14,3 +14,6 @@ CERNBox*.lnk
 /scenario-player/local_sim_env.sh
 /airflow_automation/airflow_demo/local_airflow_env.sh
 /airflow_automation/airflow_containers/compose/.env
+
+# Airflow's Helm chart, which `helm dependency build` downloads for airflow_containers/multipod-helm/
+airflow_automation/airflow_containers/multipod-helm/charts/

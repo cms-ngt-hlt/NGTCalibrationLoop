@@ -1,0 +1,23 @@
+{{/*
+The volumes the history lives on. `helm uninstall` leaves them (resource-policy: keep), and `helm install` under the same
+release name and namespace takes them back: see ../../README.md.
+*/}}
+{{- range $name, $volume := dict "postgres" .Values.postgres.storage "data" .Values.sharedVolumes.data "logs" .Values.sharedVolumes.logs }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ngt-airflow-{{ $name }}
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" (printf "ngt-airflow-%s" $name) "root" $) | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ $volume.accessMode }}]
+  {{- with $volume.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $volume.size }}
+{{- end }}

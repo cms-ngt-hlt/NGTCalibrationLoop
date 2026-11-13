@@ -1,0 +1,22 @@
+{{/*
+The scheduler's setup (files/init_multipod.sh), which Airflow's chart runs as an init container: see values.yaml's
+airflow.scheduler. A change to it takes effect at the scheduler's next start.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngt-airflow-scripts
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-scripts" "root" .) | nindent 4 }}
+data:
+  {{- (.Files.Glob "files/*.sh").AsConfig | nindent 2 }}
+---
+# The Postgres and tools pods' own ServiceAccount: nothing in them talks to Kubernetes, so it gets no API token.
+# (Airflow's chart makes one per component itself.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ngt-airflow
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow" "root" .) | nindent 4 }}
+automountServiceAccountToken: false

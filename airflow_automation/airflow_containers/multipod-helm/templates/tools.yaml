@@ -1,0 +1,66 @@
+{{/*
+Where the demo is driven from, with `kubectl exec ... airflow_demo.sh`: scenarios, faults and resets. The counterpart of
+../../compose/'s tools service, except it stays up: resets need Airflow's components stopped, and this isn't one.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngt-airflow-tools
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-tools" "root" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngt-airflow-tools
+  template:
+    metadata:
+      labels:
+        {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-tools" "root" .) | nindent 8 }}
+    spec:
+      {{- include "ngt-airflow.podSpec" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tools
+          image: {{ include "ngt-airflow.image" . }}
+          args: ["bash", "-c", "exec sleep infinity"]
+          env:
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: connection
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: fernet-key
+          resources:
+            {{- toYaml .Values.tools.resources | nindent 12 }}
+          # Ready once the scheduler's setup has made the fake data.
+          readinessProbe:
+            exec:
+              command: ["bash", "-c", '[ -f "$NGT_DEV_HOME/env.sh" ]']
+            periodSeconds: 10
+          securityContext:
+            {{- include "ngt-airflow.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: ngt-data
+              mountPath: /ngt-data
+            - name: airflow-home
+              mountPath: /opt/airflow
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: ngt-data
+          persistentVolumeClaim:
+            claimName: ngt-airflow-data
+        - name: airflow-home
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

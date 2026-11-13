@@ -1,0 +1,13 @@
+apiVersion: v2
+name: ngt-airflow-multipod
+description: >-
+  The NGT calibration loop's Airflow prototype with one pod per Airflow component: Airflow's own chart, plus Postgres,
+  the fake data and the logs on persistent volumes, and a pod to drive the demo from. See ../README.md.
+type: application
+version: 1.0.0
+appVersion: "3.3.1"
+dependencies:
+  # Its values are this chart's under `airflow:`.
+  - name: airflow
+    version: 1.22.0
+    repository: https://airflow.apache.org

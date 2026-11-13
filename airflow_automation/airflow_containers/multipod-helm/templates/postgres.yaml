@@ -1,0 +1,98 @@
+{{/* Postgres, as the chart's production guide advises a database of your own: its volume is in volumes.yaml. */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngt-airflow-postgres
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-postgres" "root" .) | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # the volume can't be on two nodes at once
+  selector:
+    matchLabels:
+      app: ngt-airflow-postgres
+  template:
+    metadata:
+      labels:
+        {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-postgres" "root" .) | nindent 8 }}
+    spec:
+      {{- include "ngt-airflow.podSpec" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        # Makes the volume writable for the postgres user's group.
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+          env:
+            - name: POSTGRES_USER
+              value: airflow
+            - name: POSTGRES_DB
+              value: airflow
+            # Only used the first time, to initialise the database, which keeps it from then on.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: postgres-password
+            # A subdirectory, because a non-root UID can't take over the mount point itself.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow", "-d", "airflow"]
+            periodSeconds: 5
+          # Restarts a server that hangs. Generous, as a first start's initdb has to fit in it. Not quite the readiness
+          # check, as policy engines flag two identical probes.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            # The image's own user is root, which runAsNonRoot refuses. This is its postgres user.
+            runAsUser: 999
+            {{- include "ngt-airflow.containerSecurity" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # The server's socket and lock file.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ngt-airflow-postgres
+        - name: run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngt-airflow-postgres
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-postgres" "root" .) | nindent 4 }}
+spec:
+  selector:
+    app: ngt-airflow-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
