@@ -359,6 +359,8 @@ The same mocks as above apply, except that job launches are intercepted one leve
   values, the post-renderer and the extras fit together, that every pod runs the strictest way a cluster can run it, and
   that the setup script sets up once. The chart's half needs Helm 3.19+ and Airflow's chart, which
   `tests/airflow-ngt/helm_chart_fixtures.py` downloads once into pytest's cache (or takes from `$NGT_AIRFLOW_CHART`).
+- `tests/airflow-ngt/test_airflow_daq_dev_multipod.py` -- the same on `daq-dev`: its tenant's rules on every pod and
+  volume, and a host of its own for each namespace.
 
 ## The offline simulator (`scenario-player/`)
 

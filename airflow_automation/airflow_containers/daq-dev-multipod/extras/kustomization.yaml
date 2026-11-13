@@ -1,0 +1,54 @@
+# ../../multipod-helm/extras as it runs on daq-dev, for `kubectl -n <namespace> apply -k` before `helm install`: see
+# ../README.md. No `namespace:` here, so the one you give (or your context's) is where it goes, as for Helm.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../multipod-helm/extras
+  - ngt-airflow-daq-dev-multipod.yaml
+images:
+  # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch. The same as ../values.yaml's.
+  - name: ngt-airflow
+    newName: harbor.cms/ngt-sakura/ngt-airflow
+    newTag: 3.3.1-3
+  # Harbor's cache of registry.cern.ch, which keeps Docker Hub's images under docker.io/.
+  - name: postgres
+    newName: harbor.cms/it-registry-proxy/docker.io/library/postgres
+# As the cluster's policies and kubernetes-governance.md ask. Not includeSelectors: a Deployment's selector can't change
+# once it exists.
+labels:
+  - includeTemplates: true
+    pairs:
+      app.kubernetes.io/name: ngt-airflow
+      app.kubernetes.io/instance: ngt-airflow-multipod
+      app.kubernetes.io/part-of: cms-daq
+      app.kubernetes.io/env: development
+      app.kubernetes.io/version: 3.3.1
+      app.kubernetes.io/managed-by: kubectl
+      cms.cern.ch/division: ngt-sakura
+patches:
+  # The cluster's policies flag pods that run as the namespace's `default` ServiceAccount.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/serviceAccountName
+        value: ngt-airflow
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value: [{name: harbor-ngt-sakura}]
+  # Postgres on Longhorn, kept on three nodes. Deleting the PVC, or the namespace, deletes the data.
+  - target:
+      kind: PersistentVolumeClaim
+      name: ngt-airflow-postgres
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: longhorn
+  # NetApp's NFS, the only class whose volumes pods on different nodes can share.
+  - target:
+      kind: PersistentVolumeClaim
+      name: ngt-airflow-(data|logs)
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: trident-csi-nfs-dedicated
