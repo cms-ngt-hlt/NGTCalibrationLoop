@@ -113,6 +113,14 @@ def test_each_namespace_gets_its_own_host(render_chart, namespace):
     assert backend["name"] in {doc["metadata"]["name"] for doc in docs if doc["kind"] == "Service"}
 
 
+def test_step_pods_pass_the_clusters_checks_and_run_where_nfs_mounts(render_chart):
+    docs = render_chart("ngt-sakura-anything", VALUES, CONTAINERS / "multipod-helm" / "values-step-pods.yaml")
+    config = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "ngt-airflow-step-pod")
+    pod = yaml.safe_load(config["data"]["pod.yaml"])
+    _check_pod("step pod", pod["spec"], pod["metadata"]["labels"])
+    assert pod["spec"]["nodeSelector"] == NFS_NODES
+
+
 def test_every_pod_passes_the_clusters_audited_checks(render_chart):
     docs = render_chart("ngt-sakura-airflow-multipod", VALUES)
     workloads = [doc for doc in docs if doc["kind"] in ("Deployment", "StatefulSet", "Job")]
