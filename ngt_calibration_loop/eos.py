@@ -9,12 +9,21 @@ import logging
 import re
 import subprocess
 
+from . import config
+
 EOS_PREFIX = "root://eoscms.cern.ch/"
+
+
+def input_prefix():
+    """What goes before an input file's path for the tools that read it: ngtParameters.jsn's INPUT_URL_PREFIX, by
+    default EOS through xrootd. `file:` reads it from a local or mounted filesystem instead, such as the live-test
+    setup's fake EOS, a directory, and any real file staged into it."""
+    return config.load_ngt_parameters().get("INPUT_URL_PREFIX", EOS_PREFIX)
 
 
 def edm_file_util(filename):
     """Run edmFileUtil on a single EOS file and return the completed subprocess result."""
-    cmd = ["edmFileUtil", EOS_PREFIX + filename, "--eventsInLumi"]
+    cmd = ["edmFileUtil", input_prefix() + filename, "--eventsInLumi"]
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
 
 
@@ -26,7 +35,7 @@ def list_available_files(path_where_files_appear):
         logging.critical("path_where_files_appear is not set. Cannot list files.")
         return []
 
-    cmd = f"xrdfs {EOS_PREFIX} ls {path_where_files_appear}"
+    cmd = f"xrdfs {input_prefix()} ls {path_where_files_appear}"
     logging.info(f"Running command: {cmd}")
 
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)

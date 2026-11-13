@@ -8,6 +8,7 @@ NGTLoopStep2's transitions FSM); every case there has an equivalent here
 exercising the plain-function ngt_calibration_loop.step2 API instead.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 import omsapi
 import pytest
 import yaml
+from support.fake_subprocess import FakeEOS, make_fake_run
 
 from ngt_calibration_loop import config, oms, shell, step2
 
@@ -309,6 +311,25 @@ def test_prepare_and_launch_express_job_full_cycle(isolated_env, fake_eos, job_r
 
     processed = step2.load_already_processed(ctx.working_dir)
     assert any("run398600_ls0051.root" in p for p in processed)
+
+
+def test_input_files_are_read_through_the_configured_prefix(isolated_env, monkeypatch, job_runner):
+    """EOS through xrootd by default; ngtParameters.jsn's INPUT_URL_PREFIX `file:` reads a local or mounted file,
+    such as a real file staged into the live-test setup's fake EOS directory."""
+    params =json.loads(isolated_env.parameters_path.read_text(encoding="utf-8"))
+    isolated_env.parameters_path.write_text(json.dumps(dict(params, INPUT_URL_PREFIX="file:")), encoding="utf-8")
+    eos_files = FakeEOS()
+    monkeypatch.setattr(subprocess, "run", make_fake_run(eos_files, prefix="file:"))
+    ctx = _latch_live_run(398600)
+    eos_files.add_file(f"{ctx.path_where_files_appear}/run398600_ls0051.root", run_number=398600, ls_numbers=[51])
+
+    decision = step2.check_ls_for_processing(ctx)
+    job_spec = step2.prepare_express_job(ctx, decision.ls_to_process)
+
+    script = (Path(ctx.working_dir) / job_spec.script_name).read_text(encoding="utf-8")
+    assert f"--filein file:{ctx.path_where_files_appear}/run398600_ls0051.root " in script
+    assert "root://" not in script
+    assert job_spec.output_file == "run398600_LS0051To0051_ecalPedsStep2.root"  # edmFileUtil read it through file:
 
 
 def test_max_files_per_job_batches_one_at_a_time(isolated_env, fake_eos):

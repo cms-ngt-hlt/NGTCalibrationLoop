@@ -224,7 +224,7 @@ def prepare_express_job(ctx: RunContext, ls_to_process) -> Optional[JobSpec]:
     output_filename = f"run{ctx.run_number}_{affix}{output_affix}.root"
     python_filename = f"run{ctx.run_number}_{affix}{output_affix}.py"
     witness_file = f"run{ctx.run_number}_{affix}{output_affix}_job.txt"
-    filein_paths = ",".join("root://eoscms.cern.ch/" + str(p) for p in express_ls)
+    filein_paths = ",".join(eos.input_prefix() + str(p) for p in express_ls)
 
     ngt_params = ctx.ngt_params
     scram_arch = ngt_params["SCRAM_ARCH"]
