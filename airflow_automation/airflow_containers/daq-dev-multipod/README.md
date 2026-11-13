@@ -19,12 +19,15 @@ What `daq-dev` changes, all in [`values.yaml`](values.yaml), on top of the chart
 Nothing here names the namespace: any of the tenant's (`ngt-sakura-...`) gets its own instance. This page uses
 `ngt-sakura-airflow-multipod`, which exists already.
 
-> **Status:** first installed on 2026-11-13. Its five pods landed on a node where NetApp's NFS doesn't mount, and never
-> started. A pod on a `rubu` node then mounted both volumes and wrote to them as the image's user, so `values.yaml` now
-> keeps those pods there. Not installed again since. Checked against the cluster on 2026-11-13: the StorageClasses,
-> quotas and nodes below. The rendered output passes Kyverno's upstream versions of the cluster's policies, except
-> `forbid-cpu-limits` as for the one-pod. It's tested on kind as the generic page says. If a step differs, please correct
-> this page.
+> **Status:** deployed on 2026-11-13, in `ngt-sakura-airflow-multipod`.
+> - **The first install failed.** Its five pods landed on a node where NetApp's NFS doesn't mount, and never started.
+> - **The fix:** a pod on a `rubu` node mounted both volumes and wrote to them as the image's user, so `values.yaml` now
+>   keeps those pods there. A `helm upgrade` brought everything up.
+> - **The result:** the five pods spread over three `rubu` nodes, Postgres elsewhere, with no restarts.
+>   `basic_ecal_pedestals` PASSED, and Airflow is healthy through the Ingress.
+> - **The policy report:** only `forbid-cpu-limits` and `pvc-readwriteonce`, as step 3 expects.
+>
+> If a step differs, please correct this page.
 
 ## Before you start
 
@@ -123,7 +126,7 @@ login and host, e.g. `https://ngt-sakura-airflow-demo2.daq-dev.cms.cern.ch`.
 
 | What you see | Likely cause | What to do |
 |---|---|---|
-| Pods stuck in `ContainerCreating`, events `FailedMount ... error mounting NFS volume ... exit status 32` | The pod is on a node where NetApp's NFS doesn't mount, as on the five `10.176.152.x` ones on 2026-11-13 | `kubectl -n $NS get pods -o wide`: `values.yaml` keeps them on `rubu` nodes. If those fail too, ask the sysadmins, or see below |
+| Pods stuck in `ContainerCreating`, events `FailedMount ... error mounting NFS volume ... exit status 32` | The pod is on a node where NetApp's NFS doesn't mount, as on the five `10.176.152.x` ones on 2026-11-13 | `kubectl -n $NS get pods -o wide`: `values.yaml` keeps them on `rubu` nodes. After a failed install, `helm upgrade` with step 2's arguments: the volumes stay. If `rubu` nodes fail too, ask the sysadmins, or see below |
 | A PVC `Pending` after step 2 | Quota, or the class can't make the volume | `kubectl -n $NS describe pvc`; `kubectl describe resourcequota` |
 | Pods `CreateContainerConfigError` | No Secret `ngt-airflow` in this namespace | Step 1 |
 | `found in Chart.yaml, but missing in charts/ directory: airflow` | Airflow's chart isn't downloaded yet | Step 2's `helm dependency build` |
