@@ -10,7 +10,8 @@
 # The release name must be `ngt`: post-renderer/ and ../README.md expect the names Airflow's chart then gives its
 # objects. Any namespace works, and several at once. How to deploy it: ../README.md.
 
-# This chart's own objects. Their image, labels and pull Secrets are Airflow's, under airflow: below.
+# This chart's own objects. Their image, labels and pull Secrets are Airflow's, under airflow: below. So are the tools
+# pod's security context and node selector: it runs Airflow's image on Airflow's volumes.
 postgres:
   image:
     repository: postgres
@@ -89,10 +90,13 @@ airflow:
         # Otherwise the scheduler becomes a StatefulSet with a log volume of its own.
         enabled: false
 
-  # The restricted Pod Security level, with no fixed UID: the image runs as any.
+  # The restricted Pod Security level, with no fixed UID: the image runs as any, in group 0. Volumes on block storage
+  # start out writable by root alone: fsGroup gives them to that group, as Airflow's chart does unless told otherwise.
   securityContexts:
     pod:
       runAsNonRoot: true
+      fsGroup: 0
+      fsGroupChangePolicy: OnRootMismatch  # only a volume's first mount goes through all its files
       seccompProfile:
         type: RuntimeDefault
     containers:
@@ -144,7 +148,8 @@ airflow:
 
   # Resources from what each component used at its peak through four scenarios on kind (scheduler 783 MiB, triggerer
   # 462, dag-processor 353, API server 307; Postgres and the tools pod, above, 141 and 134), with room for the
-  # `airflow jobs check` liveness probes, which run inside the containers.
+  # `airflow jobs check` liveness probes, which run inside the containers. Each takes ten seconds of CPU or so: with a
+  # limit of one CPU, the dag-processor's and the triggerer's timed out, and the dag-processor was restarted. Hence two.
   scheduler:
     # LocalExecutor: tasks run in here, so this is where the fake toolchain's data has to be.
     extraVolumes:
@@ -232,7 +237,7 @@ airflow:
       enabled: false
     resources:
       requests: {cpu: 150m, memory: 384Mi}
-      limits: {cpu: "1", memory: 896Mi}
+      limits: {cpu: "2", memory: 896Mi}
 
   # Only parses DAGs, so no fake data: ngt_dags_watch.py stays importable without it.
   dagProcessor:
@@ -242,9 +247,12 @@ airflow:
       enabled: false
     resources:
       requests: {cpu: 100m, memory: 320Mi}
-      limits: {cpu: "1", memory: 768Mi}
+      limits: {cpu: "2", memory: 768Mi}
 
   apiServer:
+    # Two minutes to start rather than one: with the other components starting on the same node, it took 52 s on kind.
+    startupProbe:
+      failureThreshold: 12
     serviceAccount:
       automountServiceAccountToken: false
     resources:

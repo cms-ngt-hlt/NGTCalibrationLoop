@@ -90,6 +90,13 @@ def test_airflow_runs_no_jobs_and_nothing_talks_to_kubernetes():
     assert airflow["data"]["metadataSecretName"] == "ngt-airflow"
 
 
+def test_components_checked_with_airflows_cli_have_room_for_it():
+    # Their liveness probes run `airflow jobs check` inside the container: with one CPU, they timed out on kind.
+    airflow = _values()["airflow"]
+    for component in ("scheduler", "triggerer", "dagProcessor"):
+        assert float(airflow[component]["resources"]["limits"]["cpu"]) >= 2, component
+
+
 def test_the_scheduler_alone_sets_up_and_the_others_wait_for_it():
     airflow = _values()["airflow"]
     # Its own setup migrates: waiting for the migrations first would wait forever.
@@ -233,6 +240,25 @@ def test_its_own_objects_and_airflows_name_the_same_things(render_chart):
     # One image for every pod but Postgres's, set once, under airflow.images.
     images = {c["image"] for doc in _workloads(docs) for c in doc["spec"]["template"]["spec"]["containers"]}
     assert images == {"ngt-airflow:dev", "postgres:16"}
+
+
+def test_every_pod_can_write_the_volumes_it_mounts(render_chart):
+    # A volume on block storage starts out writable by root alone: fsGroup gives it to the group each image runs in.
+    pods = {d["metadata"]["name"]: d["spec"]["template"]["spec"] for d in render_chart("ngt-any") if d["kind"] == "Deployment"}
+    for name, pod in pods.items():
+        if any("persistentVolumeClaim" in volume for volume in pod.get("volumes", [])):
+            assert pod["securityContext"]["fsGroup"] == (999 if name == "ngt-airflow-postgres" else 0), name
+            assert pod["securityContext"]["fsGroupChangePolicy"] == "OnRootMismatch", name
+    # The tools pod runs Airflow's image on Airflow's volumes.
+    assert pods["ngt-airflow-tools"]["securityContext"] == pods["ngt-scheduler"]["securityContext"]
+
+
+def test_the_tools_pod_runs_where_airflows_pods_may(render_chart, tmp_path):
+    values = tmp_path / "nodes.yaml"
+    values.write_text("airflow:\n  nodeSelector:\n    disk: shared\n", encoding="utf-8")
+    pods = {d["metadata"]["name"]: d["spec"]["template"]["spec"] for d in render_chart("ngt-any", values) if d["kind"] == "Deployment"}
+    selected = {name for name, pod in pods.items() if pod.get("nodeSelector") == {"disk": "shared"}}
+    assert selected == set(pods) - {"ngt-airflow-postgres"}, "Postgres's volume is its own: it can run anywhere"
 
 
 def test_postgres_runs_as_its_own_user_on_a_volume_it_can_write(render_chart):

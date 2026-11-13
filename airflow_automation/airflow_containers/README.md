@@ -235,14 +235,15 @@ Nothing names the namespace: each namespace you install it in gets an instance o
 
 > **Status:** verified on a Kubernetes (kind) cluster enforcing the `restricted` level, with two instances side by side.
 > Scenarios passed, before and after every pod was deleted at once, and after a reset. Data survived `helm uninstall`,
-> and a new `helm install` took the volumes back.
+> and a new `helm install` took the volumes back. Also on three workers, with an `airflow.nodeSelector` and volumes
+> that start out writable by root alone.
 
 ### Before you start
 
 - A Kubernetes cluster, with `kubectl` pointing at a namespace you may use. It needs two kinds of storage: a
   StorageClass for Postgres, and one whose volumes pods on different nodes can share (`ReadWriteMany`, such as NFS or
-  CephFS), for the fake data and the logs. Ask your cluster's admins which classes those are. On a one-node cluster, see
-  [below](#on-a-one-node-cluster).
+  CephFS), for the fake data and the logs. Ask your cluster's admins which classes those are, and whether every node can
+  mount them. On a one-node cluster, see [below](#on-a-one-node-cluster).
 - Helm 4 (`helm version`): Airflow's chart needs 3.19 or later, and the post-renderer is a Helm 4 plugin.
 - Docker, a registry your cluster can pull from, and a checkout of this repo, as for the one pod.
 
@@ -350,6 +351,7 @@ sharedVolumes:
 |---|---|---|
 | `found in Chart.yaml, but missing in charts/ directory: airflow` | Airflow's chart isn't downloaded yet | Step 3's `helm dependency build` |
 | A PVC `Pending` | No class can make that kind of volume, or the class waits for a pod to use it (`WaitForFirstConsumer`) | `kubectl describe pvc` |
+| Pods stuck in `ContainerCreating`, events `FailedMount` | Their node can't mount the volume, as some nodes can't reach an NFS server | `kubectl describe pod`. Ask your admins which nodes can, and keep the pods there with `airflow.nodeSelector` in your values: the tools pod follows it |
 | Pods `CreateContainerConfigError` | No Secret `ngt-airflow` in this namespace | Step 2 |
 | The triggerer stuck in `Init` (`Waiting for the scheduler's setup...`) | The scheduler's setup failed | `kubectl logs deploy/ngt-scheduler -c setup` |
 | `Permission denied` under `/ngt-data` or `/opt/airflow/logs` | The shared volume isn't writable for the image's user, as some NFS exports aren't | Ask for a class whose volumes any UID can write, or one honouring `fsGroup` |

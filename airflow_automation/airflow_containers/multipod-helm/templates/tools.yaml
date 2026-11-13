@@ -19,10 +19,13 @@ spec:
         {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-tools" "root" .) | nindent 8 }}
     spec:
       {{- include "ngt-airflow.podSpec" . | nindent 6 }}
+      # Airflow's image on Airflow's volumes: the same user and group as Airflow's pods, on the nodes they may run on.
       securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
+        {{- toYaml .Values.airflow.securityContexts.pod | nindent 8 }}
+      {{- with .Values.airflow.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: tools
           image: {{ include "ngt-airflow.image" . }}
