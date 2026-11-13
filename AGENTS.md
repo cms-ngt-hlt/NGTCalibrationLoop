@@ -20,6 +20,7 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
   `tmux_kill.sh` start/stop them on the calibration nodes); tests in `tests/fsm-loops/test_step{2,3,4}.py`.
 - `ngt_calibration_loop/` — processing logic (OMS/EOS queries, cmsDriver prep, batching),
   as plain functions with no Airflow dependency. `step2.py`/`step3.py`/`step4.py` per step;
+  `run_step.py` one step for one input file end to end (prepare, job, finalize; also a command line);
   `config.py`/`oms.py`/`eos.py`/`shell.py` shared helpers; `original_fsm_only/` the few
   functions only the original FSM used (no Airflow design calls them; tests in
   `tests/ngt-calib-lib/test_original_fsm_only.py`).

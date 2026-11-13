@@ -317,6 +317,9 @@ The same mocks as above apply, except that job launches are intercepted one leve
 - `tests/ngt-calib-lib/test_original_fsm_only.py` -- the same style of tests for
   `ngt_calibration_loop/original_fsm_only/` (run-directory scan, Step 3's witness-file batching
   decision).
+- `tests/ngt-calib-lib/test_run_step.py` -- `ngt_calibration_loop/run_step.py`, one step for one input
+  file end to end: each step taking the previous one's result from the run's working directory,
+  "nothing to do", and its command line.
 - `tests/scenario-player/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building
   (ordering, concurrent-run merging) and playback (event firing order/arguments), with
   `scenario-player/seed.py`'s functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access
