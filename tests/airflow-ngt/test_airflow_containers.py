@@ -312,6 +312,14 @@ def test_image_imports_the_fake_omsapi_without_the_fake_data():
     assert "/opt/ngt/scenario-player" in re.search(r"PYTHONPATH=(\S+)", dockerfile).group(1).split(":")
 
 
+def test_image_has_the_kubernetes_provider_at_the_version_airflow_pins():
+    # On a cluster, the process DAGs' steps can run in pods of another image (KubernetesPodOperator).
+    dockerfile = (CONTAINERS / "Dockerfile").read_text(encoding="utf-8")
+    install = re.search(r"RUN pip install [^\n]*apache-airflow==(?:[^\n]*\\\n)*[^\n]*", dockerfile).group(0)
+    assert "apache-airflow-providers-cncf-kubernetes" in install
+    assert '--constraint "${HOME}/constraints.txt"' in install
+
+
 @needs_bash
 @pytest.mark.parametrize("command", ["start", "stop", "status", "ui", "logs"])
 def test_demo_script_leaves_process_management_to_the_container_runtime(command):

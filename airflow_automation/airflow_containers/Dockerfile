@@ -6,12 +6,13 @@
 # Slim: the same five providers as the venv README.md's setup section creates, and well under half
 # the size of the full image (which ships ~100 providers nothing here imports). It has no database
 # drivers and no FAB, so psycopg2, asyncpg and the FAB provider (what onepod/ logs in with) are
-# added, at the versions Airflow's own constraints pin.
+# added, at the versions Airflow's own constraints pin. So is the Kubernetes provider: on a cluster,
+# the process DAGs can run each step in a pod of another image, a CMSSW one (KubernetesPodOperator).
 ARG AIRFLOW_BASE_IMAGE=apache/airflow:slim-3.3.1-python3.12
 FROM ${AIRFLOW_BASE_IMAGE}
 
 RUN pip install --no-cache-dir "apache-airflow==${AIRFLOW_VERSION}" apache-airflow-providers-fab \
-      psycopg2-binary asyncpg --constraint "${HOME}/constraints.txt"
+      apache-airflow-providers-cncf-kubernetes psycopg2-binary asyncpg --constraint "${HOME}/constraints.txt"
 
 # Security fixes released since Airflow's constraints were pinned, which Harbor's scan (Trivy) found on
 # 2026-11-09: each at the first version that fixes it, as long as what requires it allows that, which
