@@ -1,0 +1,23 @@
+# Steps 2, 3 and 4's harvest in pods of their own, one per step (KubernetesPodOperator), instead of in the
+# scheduler's. Add it after the chart's and the cluster's values:
+#   helm install ngt multipod-helm/ [-f <your cluster's values>] -f multipod-helm/values-step-pods.yaml ...
+# The pods come from stepPods in values.yaml: Airflow's image and its fake toolchain, unless a cluster's values give
+# another image and its setup. See ../README.md.
+stepPods:
+  enabled: true
+
+airflow:
+  # The scheduler starts them, as it runs the tasks (LocalExecutor). It gets the Role in templates/step-pods.yaml, and an
+  # API token: post-renderer/ projects one into the Deployment this annotates, as Airflow's chart only does for an
+  # executor of its own that starts pods. The pod still says automountServiceAccountToken: false.
+  scheduler:
+    annotations:
+      ngt-airflow/step-pods: "true"
+  # The pod template, for every component that reads the DAG files: the dag-processor builds the DAGs from them, the
+  # scheduler runs their tasks.
+  extraEnv: |
+    - name: NGT_STEP_POD_TEMPLATE
+      valueFrom:
+        configMapKeyRef:
+          name: ngt-airflow-step-pod
+          key: pod.yaml

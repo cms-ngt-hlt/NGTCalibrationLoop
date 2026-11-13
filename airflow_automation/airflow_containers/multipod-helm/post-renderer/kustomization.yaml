@@ -36,3 +36,24 @@ patches:
       kind: Secret
       metadata:
         name: ngt-broker-url
+  # With values-step-pods.yaml, which annotates it, the scheduler starts each step's pod, so it needs an API token. The
+  # chart projects one only for an executor of its own that starts pods; this is the same volume. Without that file,
+  # nothing matches and the scheduler has no token.
+  - target:
+      kind: Deployment
+      name: ngt-scheduler
+      annotationSelector: ngt-airflow/step-pods=true
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: kube-api-access
+          projected:
+            defaultMode: 420
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 3600}
+              - configMap: {name: kube-root-ca.crt, items: [{key: ca.crt, path: ca.crt}]}
+              - downwardAPI: {items: [{path: namespace, fieldRef: {apiVersion: v1, fieldPath: metadata.namespace}}]}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: {name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true}

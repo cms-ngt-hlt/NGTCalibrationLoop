@@ -182,6 +182,41 @@ data: {airflow.cfg: ""}
     assert api["readinessProbe"]["httpGet"]["path"] == "/api/v2/monitor/health"
 
 
+@needs_bash
+@needs_kubectl
+def test_post_renderer_gives_the_scheduler_an_api_token_only_when_it_starts_step_pods():
+    rendered = """
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ngt-scheduler, annotations: {ngt-airflow/step-pods: "true"}}
+spec: {template: {spec: {containers: [{name: scheduler, volumeMounts: []}], volumes: []}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ngt-triggerer}
+spec: {template: {spec: {containers: [{name: triggerer, volumeMounts: []}], volumes: []}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ngt-api-server}
+spec: {template: {spec: {containers: [{name: api-server, livenessProbe: {httpGet: {port: 8080}}}]}}}
+---
+apiVersion: v1
+kind: Secret
+metadata: {name: ngt-broker-url}
+"""
+    out = subprocess.run(["bash", str(POST_RENDERER / "post-render.sh")], input=rendered, capture_output=True, text=True, check=True)
+    docs = _by_name(d for d in yaml.safe_load_all(out.stdout) if d)
+    scheduler = docs[("Deployment", "ngt-scheduler")]["spec"]["template"]["spec"]
+    assert scheduler["automountServiceAccountToken"] is False, "still said by the pod: the token is projected"
+    (volume,) = scheduler["volumes"]
+    assert [list(source)[0] for source in volume["projected"]["sources"]] == ["serviceAccountToken", "configMap", "downwardAPI"]
+    assert scheduler["containers"][0]["volumeMounts"] == [
+        {"name": volume["name"], "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount", "readOnly": True}
+    ]
+    assert docs[("Deployment", "ngt-triggerer")]["spec"]["template"]["spec"]["volumes"] == []
+
+
 def test_post_renderer_is_a_helm_4_plugin_running_the_script():
     plugin = yaml.safe_load((POST_RENDERER / "plugin.yaml").read_text(encoding="utf-8"))
     assert plugin["type"] == "postrenderer/v1" and plugin["runtime"] == "subprocess"
@@ -259,6 +294,43 @@ def test_the_tools_pod_runs_where_airflows_pods_may(render_chart, tmp_path):
     pods = {d["metadata"]["name"]: d["spec"]["template"]["spec"] for d in render_chart("ngt-any", values) if d["kind"] == "Deployment"}
     selected = {name for name, pod in pods.items() if pod.get("nodeSelector") == {"disk": "shared"}}
     assert selected == set(pods) - {"ngt-airflow-postgres"}, "Postgres's volume is its own: it can run anywhere"
+
+
+def _airflow_env(doc):
+    return {e["name"]: e for e in doc["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+
+
+def test_step_pods_are_off_unless_asked_for(render_chart):
+    docs = _by_name(render_chart("ngt-any"))
+    assert not {key for key in docs if key[1].startswith("ngt-airflow-step")}
+    scheduler = docs[("Deployment", "ngt-scheduler")]["spec"]["template"]["spec"]
+    assert not [v for v in scheduler["volumes"] if "projected" in v], "no API token for the scheduler"
+    assert "NGT_STEP_POD_TEMPLATE" not in _airflow_env(docs[("Deployment", "ngt-scheduler")])
+
+
+def test_step_pods_come_from_a_template_only_the_scheduler_may_start(render_chart):
+    docs = _by_name(render_chart("ngt-any", MULTIPOD / "values-step-pods.yaml"))
+    pod = yaml.safe_load(docs[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"])
+    _check_pod("step pod", pod["spec"])
+    assert pod["spec"]["restartPolicy"] == "Never"
+    (base,) = pod["spec"]["containers"]
+    assert base["name"] == "base" and base["image"] == "ngt-airflow:dev", "KubernetesPodOperator's container, Airflow's image"
+    assert base["command"][-1] == "run_step" and "python3 -m ngt_calibration_loop.run_step" in base["command"][2]
+    assert {"name": "ngt-data", "persistentVolumeClaim": {"claimName": "ngt-airflow-data"}} in pod["spec"]["volumes"]
+
+    role = docs[("Role", "ngt-airflow-step-pods")]
+    assert {r for rule in role["rules"] for r in rule["resources"]} == {"pods", "pods/log", "events"}
+    binding = docs[("RoleBinding", "ngt-airflow-step-pods")]
+    assert binding["roleRef"]["kind"] == "Role"
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "ngt-airflow-scheduler"}]
+    assert ("ServiceAccount", "ngt-airflow-scheduler") in docs
+
+    scheduler = docs[("Deployment", "ngt-scheduler")]["spec"]["template"]["spec"]
+    assert scheduler["automountServiceAccountToken"] is False
+    assert [v for v in scheduler["volumes"] if "projected" in v], "the scheduler gets a projected API token"
+    for component in ("ngt-scheduler", "ngt-dag-processor", "ngt-triggerer", "ngt-api-server"):
+        ref = _airflow_env(docs[("Deployment", component)])["NGT_STEP_POD_TEMPLATE"]["valueFrom"]["configMapKeyRef"]
+        assert ref == {"name": "ngt-airflow-step-pod", "key": "pod.yaml"}, component
 
 
 def test_postgres_runs_as_its_own_user_on_a_volume_it_can_write(render_chart):

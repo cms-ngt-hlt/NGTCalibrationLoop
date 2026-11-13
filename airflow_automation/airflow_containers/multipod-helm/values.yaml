@@ -39,6 +39,24 @@ tools:
   resources:
     requests: {cpu: 50m, memory: 256Mi}
     limits: {cpu: "1", memory: 512Mi}
+# Steps 2, 3 and 4's harvest in pods of their own, built from this (templates/step-pods.yaml), instead of in the
+# scheduler's: on with values-step-pods.yaml. By default Airflow's image, whose fake toolchain the steps then run; a
+# cluster's values can give another image, such as a CMSSW one, and the script that sets it up.
+stepPods:
+  enabled: false
+  image: ""  # Airflow's
+  # Runs with the step's arguments as "$@". env.sh puts the fake toolchain on PATH and points at the scenario's config.
+  script: |-
+    source "$NGT_DEV_HOME/env.sh"
+    exec python3 -m ngt_calibration_loop.run_step "$@"
+  env: []
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 512Mi}
+  nodeSelector: {}  # empty: Airflow's (airflow.nodeSelector)
+  affinity: {}
+  extraVolumes: []
+  extraVolumeMounts: []
 
 # Airflow's chart.
 airflow:

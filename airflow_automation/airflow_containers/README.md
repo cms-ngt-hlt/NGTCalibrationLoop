@@ -227,9 +227,9 @@ version 1.22.0, as its dependency, which is how Airflow's docs suggest extending
   - The setup script the scheduler runs first (`files/init_multipod.sh`).
 
   The volumes carry `helm.sh/resource-policy: keep`, so `helm uninstall` leaves them, and the history with them.
-- **`post-renderer/`**: a Helm 4 plugin for the two things the chart's values can't set, which policy engines such as
-  Kyverno ask for: each pod saying itself that it gets no API token, and an API server whose liveness check isn't its
-  readiness check.
+- **`post-renderer/`**: a Helm 4 plugin for what the chart's values can't set. Two things policy engines such as Kyverno
+  ask for: each pod saying itself that it gets no API token, and an API server whose liveness check isn't its readiness
+  check. And, with step pods ([below](#steps-in-pods-of-their-own)), the API token the scheduler needs to start them.
 
 Nothing names the namespace: each namespace you install it in gets an instance of its own.
 
@@ -345,6 +345,27 @@ sharedVolumes:
     accessMode: ReadWriteOnce
 ```
 
+### Steps in pods of their own
+
+By default the scheduler runs each file's steps itself (LocalExecutor). With `values-step-pods.yaml` added last, steps
+2, 3 and 4's harvest each run in a pod of their own instead, which Airflow starts with KubernetesPodOperator and deletes
+once it has succeeded:
+
+```bash
+helm upgrade ngt airflow_automation/airflow_containers/multipod-helm -f my-cluster.yaml \
+  -f airflow_automation/airflow_containers/multipod-helm/values-step-pods.yaml --post-renderer ngt-airflow-patches
+kubectl get pods -l app=ngt-airflow-step -w    # while a scenario plays
+```
+
+- **What runs in them:** the library's step runner (`ngt_calibration_loop/run_step.py`), with the step's arguments. A
+  step hands the next its result through the shared volume.
+- **The template:** `stepPods` in `values.yaml`. It uses Airflow's image and its fake toolchain, unless your values give
+  another image and the script that sets it up, such as a CMSSW one for real processing.
+- **The scheduler gets what starting them takes:** a Role in the namespace (pods, their logs, events), and an API
+  token, which the post-renderer projects in. Without this file it has neither.
+- **A failed pod is kept, to look at,** with `kubectl logs <pod>`. Its task in the UI shows the same output.
+- **The upload stays in the scheduler.**
+
 ### If something goes wrong
 
 | What you see | Likely cause | What to do |
@@ -360,12 +381,15 @@ sharedVolumes:
 | Events `Startup probe failed` or `Liveness probe failed: command timed out` in the first minutes | The components are still starting, and the checks run Airflow's CLI, which is slow on a busy node | Nothing, as long as `RESTARTS` stays 0 |
 | `PersistentVolumeClaim ... exists and cannot be imported into the current release` | The volumes were left by a release of another name, or in another namespace | Install as `ngt` in their namespace |
 | `play` reports nothing happens | The run numbers were already played here | Reset, as in step 5 |
+| A step task fails with `pods is forbidden` or `Unauthorized` | Step pods without `values-step-pods.yaml`'s Role or the post-renderer's token | Install with that file, and with `--post-renderer` |
+| A step task waits, then fails with `Pod took too long to start` | The step pod can't be scheduled or its image can't be pulled | `kubectl describe pod -l app=ngt-airflow-step` |
 
 Everything else is as for the [one pod](#if-something-goes-wrong). `kubectl logs deploy/ngt-<component>` shows each
 component.
 
 ### What this deployment doesn't do
 
-- **Spread tasks out.** The scheduler runs them itself (LocalExecutor), in its own pod. One replica of each component.
+- **Spread tasks out.** The scheduler runs them itself (LocalExecutor), in its own pod, except for the steps' own pods
+  above. One replica of each component.
 - **Back anything up.** The volumes persist, but a cluster that loses them loses the history.
 - **Authenticate people**, or **run the real pipeline**: as for the [one pod](#what-this-deployment-doesnt-do).

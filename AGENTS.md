@@ -38,7 +38,8 @@ specific to one person's OS/venv/process setup belongs in a local, gitignored ov
     in one pod on any Kubernetes cluster), `openshift/` and `daq-dev/` (that pod on CERN's OpenShift
     and on CMS DAQ's `daq-dev` cluster, examples of a cluster's own overlay and tutorial),
     `multipod-helm/` (a pod per component: a chart with Airflow's as its dependency, `templates/` for
-    Postgres, the persistent volumes and the tools pod, `post-renderer/` a Helm 4 plugin) and `daq-dev-multipod/`. Its
+    Postgres, the persistent volumes, the tools pod and the step pods, `post-renderer/` a Helm 4 plugin,
+    `values-step-pods.yaml` each step in a pod of its own) and `daq-dev-multipod/`. Its
     `README.md` is the deployment tutorial. Inside a container,
     `airflow_demo.sh` still does everything but the process management (`NGT_AIRFLOW_IN_CONTAINER`).
 - `scenario-player/` — the engine-agnostic offline simulator, with no Airflow dependency:

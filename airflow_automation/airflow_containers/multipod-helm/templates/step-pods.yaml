@@ -1,0 +1,102 @@
+{{/*
+Steps 2, 3 and 4's harvest in pods of their own (values-step-pods.yaml): the Pod each is built from, which the DAGs
+read from NGT_STEP_POD_TEMPLATE (ngt_dags_watch.py) and start with KubernetesPodOperator, and the right to start
+them, for the scheduler, which runs the tasks (LocalExecutor). The pod runs the library's step runner, with the
+step's arguments as "$@" of stepPods.script.
+*/}}
+{{- define "ngt-airflow.stepPod" -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-step" "root" .) | nindent 4 }}
+spec:
+  {{- include "ngt-airflow.podSpec" . | nindent 2 }}
+  restartPolicy: Never
+  securityContext:
+    {{- toYaml .Values.airflow.securityContexts.pod | nindent 4 }}
+  {{- with (.Values.stepPods.nodeSelector | default .Values.airflow.nodeSelector) }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.stepPods.affinity }}
+  affinity:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: base  # the container KubernetesPodOperator runs the step in
+      image: {{ .Values.stepPods.image | default (include "ngt-airflow.image" .) }}
+      command: ["bash", "-c", {{ toJson .Values.stepPods.script }}, "run_step"]
+      {{- with .Values.stepPods.env }}
+      env:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      resources:
+        {{- toYaml .Values.stepPods.resources | nindent 8 }}
+      # Not a server, so nothing to ask: whether its volume is there, for policies that want a check on every container.
+      livenessProbe:
+        exec:
+          command: ["test", "-d", "/ngt-data"]
+        periodSeconds: 60
+      securityContext:
+        {{- include "ngt-airflow.containerSecurity" . | nindent 8 }}
+      volumeMounts:
+        - {name: ngt-data, mountPath: /ngt-data}
+        - {name: tmp, mountPath: /tmp}
+        {{- with .Values.stepPods.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  volumes:
+    - name: ngt-data
+      persistentVolumeClaim:
+        claimName: ngt-airflow-data
+    - name: tmp
+      emptyDir:
+        sizeLimit: 256Mi
+    {{- with .Values.stepPods.extraVolumes }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+
+{{- if .Values.stepPods.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ngt-airflow-step-pod
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-step-pod" "root" .) | nindent 4 }}
+data:
+  pod.yaml: |
+    {{- include "ngt-airflow.stepPod" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ngt-airflow-step-pods
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-step-pods" "root" .) | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, watch, delete, patch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [events]  # why a pod didn't start, for the task's log
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ngt-airflow-step-pods
+  labels:
+    {{- include "ngt-airflow.labels" (dict "name" "ngt-airflow-step-pods" "root" .) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ngt-airflow-step-pods
+subjects:
+  - kind: ServiceAccount
+    name: ngt-airflow-scheduler  # Airflow's chart names it after the release, which must be ngt
+{{- end }}
