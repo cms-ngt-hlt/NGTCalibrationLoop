@@ -1,41 +1,55 @@
-# ../multipod-helm/values.yaml as it runs on CMS DAQ's daq-dev cluster, in the tenant ngt-sakura, after extras/:
-#   helm install ngt apache-airflow/airflow --version 1.22.0 -n <namespace> \
-#     -f ../multipod-helm/values.yaml -f values.yaml --post-renderer ngt-airflow-patches
+# ../multipod-helm/ as it runs on CMS DAQ's daq-dev cluster, in the tenant ngt-sakura:
+#   helm install ngt ../multipod-helm/ -n <namespace> -f values.yaml --post-renderer ngt-airflow-patches
 # Nothing here names the namespace: each one gets its own instance. See README.md.
-images:
-  airflow:
-    # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch. The same image and tag as ../daq-dev/.
-    repository: harbor.cms/ngt-sakura/ngt-airflow
-    tag: 3.3.1-3
-# Only needed if the Harbor project is private: see ../daq-dev/README.md. A missing Secret only costs a warning.
-imagePullSecrets:
-  - harbor-ngt-sakura
-# As the cluster's policies and kubernetes-governance.md ask, on every object and pod the chart makes.
-labels:
-  app.kubernetes.io/name: ngt-airflow
-  app.kubernetes.io/instance: ngt-airflow-multipod
-  app.kubernetes.io/part-of: cms-daq
-  app.kubernetes.io/env: development
-  app.kubernetes.io/version: 3.3.1
-  app.kubernetes.io/managed-by: helm
-  cms.cern.ch/division: ngt-sakura
 
-# The UI at https://<namespace>.daq-dev.cms.cern.ch, which only resolves inside the CMS network: named after the
-# namespace, so two instances never share a host. Hostnames must be under *.daq-dev.cms.cern.ch, whose DNS already
-# points at the cluster's Traefik, and cert-manager signs this one with the CMS Puppet CA (puppet8-ca.cms).
-ingress:
-  apiServer:
-    enabled: true
-    ingressClassName: traefik
-    pathType: Prefix
-    annotations:
-      cert-manager.io/cluster-issuer: cms-ca-issuer
-    hosts:
-      - name: '{{ .Release.Namespace }}.daq-dev.cms.cern.ch'
-        tls:
-          enabled: true
-          secretName: ngt-airflow-tls  # cert-manager creates it
-config:
-  fab:
-    # The Ingress terminates TLS, so the login's cookies can be for https only. (The chart already sets enable_proxy_fix.)
-    cookie_secure: "True"
+# Postgres through Harbor's cache of registry.cern.ch, which keeps Docker Hub's images under docker.io/, on Longhorn,
+# kept on three nodes.
+postgres:
+  image:
+    repository: harbor.cms/it-registry-proxy/docker.io/library/postgres
+  storage:
+    storageClassName: longhorn
+# NetApp's NFS, the only class whose volumes pods on different nodes can share.
+sharedVolumes:
+  data:
+    storageClassName: trident-csi-nfs-dedicated
+  logs:
+    storageClassName: trident-csi-nfs-dedicated
+
+airflow:
+  images:
+    airflow:
+      # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch. The same image and tag as ../daq-dev/.
+      repository: harbor.cms/ngt-sakura/ngt-airflow
+      tag: 3.3.1-3
+  # Only needed if the Harbor project is private: see ../daq-dev/README.md. A missing Secret only costs a warning.
+  imagePullSecrets:
+    - harbor-ngt-sakura
+  # As the cluster's policies and kubernetes-governance.md ask, on every object and pod, this chart's own included.
+  labels:
+    app.kubernetes.io/name: ngt-airflow
+    app.kubernetes.io/instance: ngt-airflow-multipod
+    app.kubernetes.io/part-of: cms-daq
+    app.kubernetes.io/env: development
+    app.kubernetes.io/version: 3.3.1
+    app.kubernetes.io/managed-by: helm
+    cms.cern.ch/division: ngt-sakura
+  # The UI at https://<namespace>.daq-dev.cms.cern.ch, which only resolves inside the CMS network: named after the
+  # namespace, so two instances never share a host. Hostnames must be under *.daq-dev.cms.cern.ch, whose DNS already
+  # points at the cluster's Traefik, and cert-manager signs this one with the CMS Puppet CA (puppet8-ca.cms).
+  ingress:
+    apiServer:
+      enabled: true
+      ingressClassName: traefik
+      pathType: Prefix
+      annotations:
+        cert-manager.io/cluster-issuer: cms-ca-issuer
+      hosts:
+        - name: '{{ .Release.Namespace }}.daq-dev.cms.cern.ch'
+          tls:
+            enabled: true
+            secretName: ngt-airflow-tls  # cert-manager creates it
+  config:
+    fab:
+      # The Ingress terminates TLS, so the login's cookies can be for https only. (The chart already sets enable_proxy_fix.)
+      cookie_secure: "True"

@@ -1,8 +1,0 @@
-# What daq-dev needs on top of ../../multipod-helm/extras, besides the settings in kustomization.yaml: the Postgres and
-# tools pods' own ServiceAccount. Nothing in them talks to Kubernetes, so it gets no API token. (The chart makes one per
-# component itself.)
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: ngt-airflow
-automountServiceAccountToken: false
