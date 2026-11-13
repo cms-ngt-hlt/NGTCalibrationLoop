@@ -211,7 +211,10 @@ independently unit-testable. They read `(run_number, file)` via
 `_process_tasks.run_and_file_from_context(context)` — from the triggering Asset event's `extra`,
 or from `dag_run.conf` for a deliberate manual re-run. `step2_express` additionally skips a file
 already in `allLSProcessed.log` (an Asset-triggered DagRun has no deterministic `run_id` for
-Airflow to reject a duplicate of — see §5).
+Airflow to reject a duplicate of — see §5). What each task does is one step of the library's
+`ngt_calibration_loop/run_step.py`. A step hands the next its result through a file in the run's
+working directory (`.ngt-results/`), not XCom, so a step can also run outside Airflow, in a pod of
+another image for instance. "Nothing to do" there becomes the task's skip.
 
 ## 4. `AssetStateStore` — what the watchers remember between restarts
 

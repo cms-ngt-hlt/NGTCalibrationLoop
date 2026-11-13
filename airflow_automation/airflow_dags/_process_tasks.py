@@ -5,7 +5,9 @@ This module holds the per-step `python_callable` factories and the
 retry-kwargs/constants the DAGs use, kept out of any DAG file so the per-task
 logic stays independently unit-testable (see
 `tests/airflow-ngt/test_dags_watch.py`) and reusable by a future DAG design
-without duplication.
+without duplication. What each step does is the library's
+(`ngt_calibration_loop/run_step.py`, which also runs it outside Airflow): the
+callables here only find the DAG run's file and turn "nothing to do" into a skip.
 
 It deliberately defines **no DAGs** -- so a DAG file can
 `from airflow_dags._process_tasks import ...` without Airflow's DagBag
@@ -15,15 +17,13 @@ double-bagging that file's own DAGs (which is exactly what a plain
 each step callable does and why Step 4 is the "reprocess everything" exception.
 """
 
-import logging
 import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from airflow.sdk.exceptions import AirflowSkipException
 
 from airflow_dags.triggers import DEFAULT_RUN_END_GRACE_SECONDS
-from ngt_calibration_loop import step2, step3, step4
+from ngt_calibration_loop import run_step
 
 CALIBRATIONS = ("SiStripBad", "EcalPedestals", "BeamSpot")
 
@@ -95,119 +95,39 @@ def run_and_file_from_context(context):
 # --- processing DAG task callables (run per input file) ------------------------------
 
 
+def _call_step(step, calibration, context):
+    """Run one of the library's steps (ngt_calibration_loop.run_step) for this DAG run's file. Its result, which it
+    also leaves on disk for the next step, becomes the task's return value; nothing to do becomes a skip."""
+    run_number, file_path = run_and_file_from_context(context)
+    try:
+        return step(calibration, run_number, file_path)
+    except run_step.NothingToDo as exc:
+        raise AirflowSkipException(str(exc)) from exc
+
+
 def make_step2_express_callable(calibration):
     def _step2_express(**context):
-        # No existence check before prepare_express_job: unlike step3/4's
-        # prepare_*_job (which filter their input set down to whatever still
-        # exists locally and return None if that's empty), step2's own EOS
-        # input files aren't local paths at all (they're resolved via
-        # edmFileUtil/xrdfs -- see ngt_calibration_loop.eos) and are never
-        # deleted by anything else in this pipeline, so
-        # step2.prepare_express_job doesn't defend against this either.
-        run_number, file_path = run_and_file_from_context(context)
-
-        ctx2 = step2.build_run_context(calibration, int(run_number))
-        # The file watcher can re-yield a file in the window before
-        # allLSProcessed.log is written, and an Asset-triggered DagRun has no
-        # deterministic run_id for Airflow to reject a duplicate of -- so skip
-        # a file that's already recorded as processed.
-        if str(Path(file_path)) in step2.load_already_processed(ctx2.working_dir):
-            raise AirflowSkipException(f"{file_path} already processed for {calibration} run {run_number}")
-        job_spec = step2.prepare_express_job(ctx2, {Path(file_path)})
-        step2.run_express_job(job_spec)
-        step2.finalize_cycle(
-            ctx2, job_spec, step2.CycleDecision(action="batch", ls_to_process={Path(file_path)}, still_have_time=True)
-        )
-
-        output_path = str(Path(ctx2.working_dir) / job_spec.output_file)
-        context["ti"].xcom_push(key="step2_output", value=output_path)
-        logging.info(f"[{calibration} run {run_number}] Step 2 produced {output_path}")
+        return _call_step(run_step.step2_express, calibration, context)
 
     return _step2_express
 
 
 def make_step3_alca_callable(calibration):
     def _step3_alca(**context):
-        run_number, _file = run_and_file_from_context(context)
-        step2_output = context["ti"].xcom_pull(task_ids="step2_express", key="step2_output")
-
-        ctx3 = step3.build_run_context(calibration, str(run_number))
-        job_spec = step3.prepare_alca_prompt_job(ctx3, {Path(step2_output)})
-        if job_spec is None:
-            raise AirflowSkipException(f"Step 2 output no longer available: {step2_output}")
-
-        step3.run_alca_prompt_job(job_spec)
-        step3.finalize_cycle(
-            ctx3, job_spec, step3.CycleDecision(action="batch", files_to_process={Path(step2_output)})
-        )
-        logging.info(f"[{calibration} run {run_number}] Step 3 produced ALCARECO from {step2_output}")
+        return _call_step(run_step.step3_alca, calibration, context)
 
     return _step3_alca
 
 
 def make_step4_harvest_callable(calibration):
     def _step4_harvest(**context):
-        run_number, _file = run_and_file_from_context(context)
-
-        ctx4 = step4.build_run_context(calibration, str(run_number))
-        # Reused completely unchanged: files_to_process is already "every
-        # ALCARECO file accumulated for this run so far", every cycle --
-        # exactly what this design's Step 4 wants -- see step4.py's module
-        # docstring for why that's Step 4's existing behavior.
-        decision = step4.check_files_for_processing(ctx4)
-        if decision.action == "wait":
-            raise AirflowSkipException("Nothing new for Step 4 to harvest yet")
-
-        job_spec = step4.prepare_harvesting_job(ctx4, decision.files_to_process)
-        if job_spec is None:
-            raise AirflowSkipException("Nothing to harvest (input files vanished)")
-
-        step4.run_harvesting_job(job_spec)
-        # Hand step4_upload the exact input set this harvest used, so it
-        # uploads *this* payload rather than re-deriving a possibly different
-        # one -- see _step4_upload for why that matters.
-        context["ti"].xcom_push(
-            key="harvested_files", value=sorted(str(p) for p in job_spec.input_files)
-        )
-        logging.info(
-            f"[{calibration} run {run_number}] Step 4 harvested {len(decision.files_to_process)} accumulated file(s)"
-        )
+        return _call_step(run_step.step4_harvest, calibration, context)
 
     return _step4_harvest
 
 
 def make_step4_upload_callable(calibration):
     def _step4_upload(**context):
-        run_number, _file = run_and_file_from_context(context)
-
-        # Take the harvested input set from step4_harvest rather than
-        # recomputing it. This task used to call check_files_for_processing()
-        # itself, on the theory that the content-hashed job-dir naming made
-        # that idempotent. It doesn't: the naming is deterministic given the
-        # same input set, but the set *grows* between the two tasks as Step 3
-        # keeps producing ALCARECO files. So the upload could hash a different
-        # set than its own harvest did and resolve to a different job
-        # directory -- one whose harvest had not run (no payload to upload at
-        # all) or, worse, one holding a different harvest's payload, which it
-        # would then upload and write the processed-log for.
-        #
-        # Found live: uploadConditions.py failed to find NGTCalibEcalPedestals.db
-        # in a harvestJob_* directory whose harvest ran only moments later,
-        # and the run recorded a payload covering no lumisections at all.
-        harvested = context["ti"].xcom_pull(task_ids="step4_harvest", key="harvested_files")
-        if not harvested:
-            raise AirflowSkipException("Nothing harvested for Step 4 to upload")
-
-        ctx4 = step4.build_run_context(calibration, str(run_number))
-        job_spec = step4.prepare_harvesting_job(ctx4, {Path(p) for p in harvested})
-        if job_spec is None:
-            raise AirflowSkipException("Nothing to upload (harvested files vanished)")
-
-        step4.upload_conditions(job_spec)
-        # The decision is consulted only for finalize_cycle's is-final flag;
-        # the processed-log it writes comes from job_spec.input_files, i.e.
-        # what was actually harvested and uploaded above.
-        step4.finalize_cycle(ctx4, job_spec, step4.check_files_for_processing(ctx4))
-        logging.info(f"[{calibration} run {run_number}] Step 4 uploaded conditions")
+        return _call_step(run_step.step4_upload, calibration, context)
 
     return _step4_upload

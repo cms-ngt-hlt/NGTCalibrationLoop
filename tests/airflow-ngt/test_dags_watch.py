@@ -414,9 +414,8 @@ def test_watch_process_chain_runs_one_file_from_an_asset_event(isolated_env, fak
         "triggering_asset_events": make_triggering({"run_number": "398601", "file": input_file}),
     }
 
-    pp.make_step2_express_callable("EcalPedestals")(**context)
-    step2_output = context["ti"].xcom_pull(key="step2_output")
-    assert step2_output is not None and len(job_runner) == 1
+    step2_output = pp.make_step2_express_callable("EcalPedestals")(**context)["step2_output"]
+    assert len(job_runner) == 1
     Path(step2_output).write_bytes(b"(FAKE) RECO output\n")
 
     pp.make_step3_alca_callable("EcalPedestals")(**context)
@@ -464,7 +463,7 @@ def test_step4_upload_uploads_the_job_the_harvest_produced_not_a_recomputed_one(
     to a *different* directory -- one whose harvest had not run, leaving
     uploadConditions.py with no payload to read (it recorded one covering no
     lumisections), or worse one holding another harvest's payload. The upload
-    must take the harvested set from XCom instead.
+    must take the harvested set from the harvest's own result instead.
     """
     ctx2 = _seed_run("EcalPedestals", 398601)
     _make_alca_output(ctx2.working_dir, "alcaPromptJob_aaaaaaaaaa")
@@ -489,9 +488,9 @@ def test_step4_upload_uploads_the_job_the_harvest_produced_not_a_recomputed_one(
     )
 
 
-def test_step4_upload_skips_when_the_harvest_pushed_nothing(isolated_env, job_runner):
-    """No harvested set in XCom means no payload exists to upload -- skip
-    rather than fall back to recomputing one, which is the bug above."""
+def test_step4_upload_skips_when_the_harvest_recorded_nothing(isolated_env, job_runner):
+    """No harvested set from the harvest means no payload exists to upload --
+    skip rather than fall back to recomputing one, which is the bug above."""
     ctx2 = _seed_run("EcalPedestals", 398601)
     _make_alca_output(ctx2.working_dir, "alcaPromptJob_cccccccccc")
     context = {

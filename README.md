@@ -753,7 +753,8 @@ real pipeline.
   files (one event per file); watermarks in each Asset's `AssetStateStore`. Its triggers live in
   `airflow_automation/airflow_dags/triggers.py`, and its per-step task callables in
   `airflow_automation/airflow_dags/_process_tasks.py` -- kept DAG-free so they stay
-  independently unit-testable.
+  independently unit-testable. Each calls one step of the library's
+  `ngt_calibration_loop/run_step.py`, which can also run that step outside Airflow.
   See [`airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md`](airflow_automation/airflow-designs-docs/watch_asset_scheduling_design.md).
 - `calibrationYAML/` -- per-calibration config (unchanged format from the original FSM setup).
 - `tests/` -- see "Running the FSM logic locally / tests" and "Tests of the library and the
