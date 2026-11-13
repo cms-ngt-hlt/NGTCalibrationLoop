@@ -1,0 +1,38 @@
+# What Airflow's chart (1.22.0) can't be told through ../values.yaml, applied by post-render.sh to everything it renders.
+# The first two are what policy engines' best practices ask for, e.g. daq-dev's Kyverno policies.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - chart.yaml
+patches:
+  # restrict-automount-sa-token: no API token, said by the pod itself, not only by its ServiceAccount as values.yaml has
+  # it. The chart only writes this for a scheduler that starts pods.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/automountServiceAccountToken
+        value: false
+  # ensure-probes-different: the chart gives the API server the same HTTP check for liveness as for readiness. Alive is
+  # answering at all.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ngt-api-server
+      spec:
+        template:
+          spec:
+            containers:
+              - name: api-server
+                livenessProbe:
+                  httpGet: null
+                  tcpSocket:
+                    port: 8080
+  # The chart makes this for Celery's broker whatever the executor. LocalExecutor never reads it.
+  - patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: ngt-broker-url

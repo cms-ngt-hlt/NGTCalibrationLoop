@@ -355,6 +355,10 @@ The same mocks as above apply, except that job launches are intercepted one leve
   `kubectl apply -k` creates keeps to the rules its tenant enforces (registries, namespace prefix, Ingress class and
   hostnames, the LimitRange), and that the pod passes the checks the cluster's Kyverno policies report. They skip
   without `kubectl`.
+- `tests/airflow-ngt/test_airflow_multipod_helm.py` -- the multi-pod deployment without a cluster: that the chart's
+  values, the post-renderer and the extras fit together, that every pod runs the strictest way a cluster can run it, and
+  that the setup script sets up once. The chart's half needs Helm 3.19+ and Airflow's chart, which
+  `tests/airflow-ngt/helm_chart_fixtures.py` downloads once into pytest's cache (or takes from `$NGT_AIRFLOW_CHART`).
 
 ## The offline simulator (`scenario-player/`)
 
@@ -696,7 +700,7 @@ CERN/CMS project reports, not this repo's mocked dev environment).
 ## Running Airflow in containers
 
 `airflow_automation/airflow_containers/` runs the same DAGs against the same fake toolchain from one
-image, in two shapes. Its [README](airflow_automation/airflow_containers/README.md) is the tutorial.
+image, in three shapes. Its [README](airflow_automation/airflow_containers/README.md) is the tutorial.
 
 - **Separate containers on one machine** (`compose/airflow_compose.sh`, Docker Compose): API server, scheduler,
   dag-processor and triggerer each in their own container, with Postgres and a one-shot init -- the layout
@@ -715,6 +719,10 @@ image, in two shapes. Its [README](airflow_automation/airflow_containers/README.
   image build and a Route reachable from the CERN network only. Not yet run on the real cluster.
 - **On CMS DAQ's `daq-dev` cluster** (`daq-dev/`): another, with its own tutorial: images from the CMS Harbor, pushed
   through a SOCKS tunnel, and an Ingress reachable from the CMS network only. Deployed there on 2026-11-07.
+- **Several pods on Kubernetes, with persistent storage** (`multipod-helm/`): one pod per Airflow component from
+  Airflow's own Helm chart, with Postgres, the fake data and the logs on persistent volumes next to it, so the history
+  outlives any pod and a reinstall. Helm 4, with a post-renderer plugin for what the chart's values can't set; any
+  namespace, several at once.
 
 The image works as an arbitrary non-root user with no capabilities, the strictest way a cluster can run it, and the
 Compose files run it that way. None of this changes what "Deploying on the calibration nodes" above says about the

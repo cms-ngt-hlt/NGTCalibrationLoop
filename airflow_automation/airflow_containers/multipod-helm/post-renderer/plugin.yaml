@@ -1,0 +1,10 @@
+# A Helm 4 post-renderer: `helm plugin install` this directory once, then pass `--post-renderer ngt-airflow-patches` to
+# every `helm install`, `upgrade` and `template` of ../values.yaml. See post-render.sh.
+apiVersion: v1
+type: postrenderer/v1
+name: ngt-airflow-patches
+version: 1.0.0
+runtime: subprocess
+runtimeConfig:
+  platformCommand:
+    - command: ${HELM_PLUGIN_DIR}/post-render.sh

@@ -1,0 +1,213 @@
+# Next to Airflow's chart (../values.yaml): Postgres, the volumes the components share, and the pod the demo is driven
+# from. Plain Kubernetes, for any cluster, meeting the restricted Pod Security level with read-only root filesystems;
+# what depends on the cluster (StorageClasses, registries) goes on top, as an overlay. See ../../README.md.
+#
+# Postgres's data, on a volume of its own, which only one node at a time has to reach.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ngt-airflow-postgres
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+# The fake OMS/EOS/CMSSW data: the scheduler's tasks, the triggerer's watchers and the tools pod all read and write it,
+# wherever their pods run.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ngt-airflow-data
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+# Every component's logs, which the API server shows.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ngt-airflow-logs
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngt-airflow-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # the volume can't be on two nodes at once
+  selector:
+    matchLabels:
+      app: ngt-airflow-postgres
+  template:
+    metadata:
+      labels:
+        app: ngt-airflow-postgres
+    spec:
+      automountServiceAccountToken: false
+      # A Service named ngt-airflow* would set NGT_AIRFLOW_*_PORT, which airflow_env.sh takes for its own.
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        # Makes the volume writable for the postgres user's group.
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_USER
+              value: airflow
+            - name: POSTGRES_DB
+              value: airflow
+            # Only used the first time, to initialise the database, which keeps it from then on.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: postgres-password
+            # A subdirectory, because a non-root UID can't take over the mount point itself.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow", "-d", "airflow"]
+            periodSeconds: 5
+          # Restarts a server that hangs. Generous, as a first start's initdb has to fit in it. Not quite the readiness
+          # check, as policy engines flag two identical probes.
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "localhost", "-U", "airflow"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          securityContext:
+            # The image's own user is root, which runAsNonRoot refuses. This is its postgres user.
+            runAsUser: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # The server's socket and lock file.
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ngt-airflow-postgres
+        - name: run
+          emptyDir:
+            sizeLimit: 1Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 16Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ngt-airflow-postgres
+spec:
+  selector:
+    app: ngt-airflow-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+# Where the demo is driven from, with `kubectl exec ... airflow_demo.sh`: scenarios, faults and resets. The counterpart of
+# ../../compose/'s tools service, except it stays up: resets need Airflow's components stopped, and this isn't one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngt-airflow-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngt-airflow-tools
+  template:
+    metadata:
+      labels:
+        app: ngt-airflow-tools
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tools
+          image: ngt-airflow:dev  # a placeholder for your own build, the same as ../values.yaml's
+          args: ["bash", "-c", "exec sleep infinity"]
+          env:
+            - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: connection
+            - name: AIRFLOW__CORE__FERNET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ngt-airflow
+                  key: fernet-key
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # Ready once the scheduler's setup has made the fake data.
+          readinessProbe:
+            exec:
+              command: ["bash", "-c", '[ -f "$NGT_DEV_HOME/env.sh" ]']
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: ngt-data
+              mountPath: /ngt-data
+            - name: airflow-home
+              mountPath: /opt/airflow
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: ngt-data
+          persistentVolumeClaim:
+            claimName: ngt-airflow-data
+        - name: airflow-home
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

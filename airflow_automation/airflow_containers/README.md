@@ -14,6 +14,7 @@ Airflow DAGs against the fake OMS/EOS/CMSSW toolchain. No real data, no real upl
 | Show the UI to other people, with the least effort | [One pod on Kubernetes](#one-pod-on-kubernetes) (`onepod/`) | a Kubernetes cluster, `kubectl`, Docker |
 | The same on CERN's OpenShift, as a worked example | [`openshift/`](openshift/README.md) | a CERN account |
 | The same on CMS DAQ's `daq-dev` cluster, as another | [`daq-dev/`](daq-dev/README.md) | a CMS account, a tenant there |
+| Keep its history, with one pod per Airflow component | [Several pods on Kubernetes](#several-pods-on-kubernetes-with-persistent-storage) (`multipod-helm/`) | a cluster with shareable volumes, `kubectl`, Helm 4, Docker |
 
 All of them come from one image, [`Dockerfile`](Dockerfile): Airflow 3.3.1 plus this repo at `/opt/ngt`.
 
@@ -203,3 +204,178 @@ another, for CMS DAQ's `daq-dev` cluster.
   behind it. Don't reuse this setup for anything with real credentials.
 - **Run the real pipeline.** That needs real OMS, EOS, CMSSW and conditions DB access: see README.md's "Deploying on the
   calibration nodes".
+
+## Several pods on Kubernetes, with persistent storage
+
+What you end up with: the prototype with one pod per Airflow component (API server, scheduler, dag-processor,
+triggerer), Postgres in a pod of its own, and a pod to drive the demo from. Airflow's history, the fake data and the
+task logs are on persistent volumes, so they survive any pod being restarted or moved, and Airflow being reinstalled. As
+with the one pod, anyone who reaches the UI can read it, and changing anything takes the admin login. It's still a demo
+with fake data.
+
+It's [Airflow's own Helm chart](https://airflow.apache.org/docs/helm-chart/stable/index.html), version 1.22.0, with
+three parts in [`multipod-helm/`](multipod-helm/):
+
+- **`values.yaml`**: the chart's settings: LocalExecutor, the `restricted` Pod Security level with read-only root
+  filesystems, no Jobs, nothing that talks to Kubernetes, and resources from what each component used at its peak.
+- **`extras/`**: what the chart doesn't deploy, as plain Kubernetes for `kubectl apply -k`:
+  - Postgres and its volume, since the chart's production guide advises a database of your own.
+  - The volumes the components share, for the fake data and the logs.
+  - The tools pod.
+  - The setup script the scheduler runs first.
+
+  Being outside the chart, none of it goes with `helm uninstall`.
+- **`post-renderer/`**: a Helm 4 plugin for the two things the chart's values can't set, which policy engines such as
+  Kyverno ask for: each pod saying itself that it gets no API token, and an API server whose liveness check isn't its
+  readiness check.
+
+Nothing names the namespace: each namespace you deploy it to gets an instance of its own.
+
+> **Status:** verified on a Kubernetes (kind) cluster enforcing the `restricted` level, with two instances side by side.
+> Scenarios passed, before and after every pod was deleted at once, and after a reset. Data survived `helm uninstall`.
+
+### Before you start
+
+- A Kubernetes cluster, with `kubectl` pointing at a namespace you may use. It needs two kinds of storage: a
+  StorageClass for Postgres, and one whose volumes pods on different nodes can share (`ReadWriteMany`, such as NFS or
+  CephFS), for the fake data and the logs. Ask your cluster's admins which classes those are. On a one-node cluster, see
+  [below](#on-a-one-node-cluster).
+- Helm 4 (`helm version`): the chart needs 3.19 or later, and the post-renderer is a Helm 4 plugin.
+- Docker, a registry your cluster can pull from, and a checkout of this repo, as for the one pod.
+
+### 1. Build the image
+
+As for the one pod: [its step 1](#1-build-the-image-and-get-it-to-your-cluster). Every pod runs that one image.
+
+### 2. Create the Secret, once
+
+```bash
+pw=$(openssl rand -hex 16)
+kubectl create secret generic ngt-airflow \
+  --from-literal=postgres-password="$pw" \
+  --from-literal=connection="postgresql+psycopg2://airflow:$pw@ngt-airflow-postgres:5432/airflow" \
+  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
+  --from-literal=api-secret-key="$(openssl rand -hex 32)" \
+  --from-literal=fernet-key="$(openssl rand -base64 32 | tr '+/' '-_')" \
+  --from-literal=admin-password="$(openssl rand -hex 16)"
+unset pw
+```
+
+All the components share these. Keep the Secret for as long as the volumes: Postgres keeps the password it was first set
+up with, and the database's contents depend on the Fernet key.
+
+### 3. Deploy Postgres, the volumes and the tools pod
+
+A [kustomize](https://kustomize.io) overlay on `extras/`, as for the one pod's
+[adapting](#adapting-it-to-your-cluster). It sets your image, and the shareable StorageClass for the fake data and logs:
+
+```yaml
+# my-cluster/kustomization.yaml, next to multipod-helm/. Then: kubectl apply -k my-cluster/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../multipod-helm/extras
+images:
+  - name: ngt-airflow
+    newName: <registry>/ngt-airflow
+    newTag: "1"
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: ngt-airflow-(data|logs)
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: <your ReadWriteMany class>
+```
+
+```bash
+kubectl apply -k my-cluster/
+```
+
+The tools pod waits, `0/1 Ready`, until the scheduler's setup has made the fake data in the next step.
+
+### 4. Install Airflow
+
+```bash
+helm repo add apache-airflow https://airflow.apache.org
+helm plugin install airflow_automation/airflow_containers/multipod-helm/post-renderer   # once per machine
+helm install ngt apache-airflow/airflow --version 1.22.0 \
+  -f airflow_automation/airflow_containers/multipod-helm/values.yaml \
+  --set images.airflow.repository=<registry>/ngt-airflow --set images.airflow.tag=1 \
+  --post-renderer ngt-airflow-patches --wait --timeout 15m
+kubectl get pods    # six, all 1/1 Running
+```
+
+The release must be called `ngt`: the extras and the post-renderer expect the chart's names. The first start takes two
+minutes or so. The scheduler's init container migrates the database, sets up the fake data and creates the `admin`
+login, while the other components wait for it. Every later start only migrates.
+
+### 5. Open the UI, play a scenario
+
+```bash
+kubectl port-forward svc/ngt-api-server 8099:8080      # the UI at http://localhost:8099
+kubectl get secret ngt-airflow -o jsonpath='{.data.admin-password}' | base64 -d; echo
+kubectl exec deploy/ngt-airflow-tools -- airflow_demo.sh play scenario-player/scenarios/basic_ecal_pedestals.yaml
+```
+
+Reading, logging in and playing work as for the [one pod](#3-open-the-ui). `play`, faults and the other `airflow_demo.sh`
+commands all run in the tools pod.
+
+### 6. Reset, upgrade, remove
+
+Nothing resets by itself any more: a new pod picks up where the old one stopped. The demo's own resets need Airflow's
+components stopped around them:
+
+```bash
+kubectl scale deploy -l tier=airflow --replicas=0       # the chart's four components; Postgres and tools stay
+kubectl exec deploy/ngt-airflow-tools -- airflow_demo.sh reset-scenario   # the fake data, and the watchers' memory of it
+kubectl exec deploy/ngt-airflow-tools -- airflow_demo.sh reset-watch      # the DAGs' runs (reset-airflow: the whole database)
+kubectl scale deploy -l tier=airflow --replicas=1
+```
+
+| To... | Run |
+|---|---|
+| Change a setting, or take a new image | `helm upgrade ngt apache-airflow/airflow` with step 4's arguments and the change |
+| Remove Airflow and keep its history | `helm uninstall ngt`: a later `helm install` carries on from there |
+| Remove everything, data included | `helm uninstall ngt`, then `kubectl delete -k my-cluster/` |
+
+A second instance goes in another namespace: steps 2 to 4 with `-n <namespace>` on each command.
+
+### On a one-node cluster
+
+Such as kind or minikube. Their default class's volumes are `ReadWriteOnce`, which on one node every pod can still
+share. So the overlay replaces the access mode instead of setting a class:
+
+```yaml
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: ngt-airflow-(data|logs)
+    patch: |-
+      - op: replace
+        path: /spec/accessModes
+        value: [ReadWriteOnce]
+```
+
+### If something goes wrong
+
+| What you see | Likely cause | What to do |
+|---|---|---|
+| A PVC `Pending` | No class can make that kind of volume, or the class waits for a pod to use it (`WaitForFirstConsumer`), which is normal until step 4 | `kubectl describe pvc` |
+| Pods stuck in `Init`, `CreateContainerConfigError` | The Secret, or `extras/`'s ConfigMap, isn't there | Steps 2 and 3, in that order, before step 4 |
+| The triggerer stuck in `Init` (`Waiting for the scheduler's setup...`) | The scheduler's setup failed | `kubectl logs deploy/ngt-scheduler -c setup` |
+| `Permission denied` under `/ngt-data` or `/opt/airflow/logs` | The shared volume isn't writable for the image's user, as some NFS exports aren't | Ask for a class whose volumes any UID can write, or one honouring `fsGroup` |
+| `Error: plugin "ngt-airflow-patches" not found` | The post-renderer isn't installed on this machine | Step 4's `helm plugin install` |
+| `helm install` without `--post-renderer` worked | It does: only the two policy checks fail again | `helm upgrade` with it |
+| Events `Startup probe failed` or `Liveness probe failed: command timed out` in the first minutes | The components are still starting, and the checks run Airflow's CLI, which is slow on a busy node | Nothing, as long as `RESTARTS` stays 0 |
+| `play` reports nothing happens | The run numbers were already played here | Reset, as in step 6 |
+
+Everything else is as for the [one pod](#if-something-goes-wrong). `kubectl logs deploy/ngt-<component>` shows each
+component.
+
+### What this deployment doesn't do
+
+- **Spread tasks out.** The scheduler runs them itself (LocalExecutor), in its own pod. One replica of each component.
+- **Back anything up.** The volumes persist, but a cluster that loses them loses the history.
+- **Authenticate people**, or **run the real pipeline**: as for the [one pod](#what-this-deployment-doesnt-do).
