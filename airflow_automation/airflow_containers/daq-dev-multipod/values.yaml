@@ -17,6 +17,10 @@ sharedVolumes:
     storageClassName: trident-csi-nfs-dedicated
 
 airflow:
+  # The pods that mount those, Airflow's four and the tools pod, on the rubu nodes: the original ones, on 10.191.0.x.
+  # NetApp's NFS didn't mount on the five added in October, on 10.176.152.x (2026-11-13). CMSSW is installed on these.
+  nodeSelector:
+    node.cms.cern.ch/type: rubu
   images:
     airflow:
       # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch. The same image and tag as ../daq-dev/.

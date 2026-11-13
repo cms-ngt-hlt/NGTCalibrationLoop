@@ -24,6 +24,8 @@ CONTAINER_MIN = {"cpu": 40, "memory": 40}
 CONTAINER_MAX = {"cpu": 32000, "memory": 64 * 1024}
 # The StorageClasses the Tenant allows, by access mode, and their cap per volume.
 STORAGE = {"longhorn": ("ReadWriteOnce", None), "trident-csi-nfs-dedicated": ("ReadWriteMany", 30 * 1024)}
+# The nodes NetApp's NFS mounts on: the cluster's original ones (10.191.0.x), not those added in October (2026-11-13).
+NFS_NODES = {"node.cms.cern.ch/type": "rubu"}
 # A daq-dev policy of CMS's own: every emptyDir under this.
 EMPTYDIR_MAX = 400
 
@@ -83,6 +85,18 @@ def test_volumes_use_classes_the_tenant_allows_in_modes_they_offer(render_chart)
         mode, cap = STORAGE[claim["spec"]["storageClassName"]]
         assert claim["spec"]["accessModes"] == [mode], claim["metadata"]["name"]
         assert cap is None or _amount("memory", claim["spec"]["resources"]["requests"]["storage"]) <= cap
+
+
+def test_every_pod_on_nfs_runs_on_a_node_that_can_mount_it(render_chart):
+    docs = render_chart("ngt-sakura-anything", VALUES)
+    nfs = {d["metadata"]["name"] for d in docs if d["kind"] == "PersistentVolumeClaim" and d["spec"]["storageClassName"] == "trident-csi-nfs-dedicated"}
+    on_nfs = {}
+    for doc in docs:
+        if doc["kind"] == "Deployment":
+            pod = doc["spec"]["template"]["spec"]
+            if {v["persistentVolumeClaim"]["claimName"] for v in pod.get("volumes", []) if "persistentVolumeClaim" in v} & nfs:
+                on_nfs[doc["metadata"]["name"]] = pod.get("nodeSelector")
+    assert on_nfs == dict.fromkeys(["ngt-airflow-tools", "ngt-api-server", "ngt-dag-processor", "ngt-scheduler", "ngt-triggerer"], NFS_NODES)
 
 
 @pytest.mark.parametrize("namespace", ["ngt-sakura-airflow-multipod", "ngt-sakura-airflow-second"])
