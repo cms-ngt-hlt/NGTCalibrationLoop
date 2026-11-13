@@ -8,6 +8,9 @@ NGTLoopStep2's transitions FSM); every case there has an equivalent here
 exercising the plain-function ngt_calibration_loop.step2 API instead.
 """
 
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +21,7 @@ import yaml
 from ngt_calibration_loop import config, oms, shell, step2
 
 CALIBRATION = "EcalPedestals"  # minLsToProcess=50 per calibrationYAML/EcalPedestals.yaml
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _patch_calib_yaml(isolated_env, calibration, **step_2_config_overrides):
@@ -44,6 +48,14 @@ def make_run(run_number, start_time, end_time=None, last_ls=100):
 
 
 # --- Config wiring -----------------------------------------------------------------
+
+
+def test_step2_imports_without_an_oms_client():
+    """A pod of a CMSSW image has neither omsapi nor requests. Step 2's job asks OMS nothing, and importing step2
+    (which imports oms) mustn't need them: oms.py imports them where it queries."""
+    code = "import sys; sys.modules['omsapi'] = None; sys.modules['requests'] = None; import ngt_calibration_loop.step2"
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+    subprocess.run([sys.executable, "-c", code], env=env, check=True)
 
 
 def test_config_wiring(isolated_env):

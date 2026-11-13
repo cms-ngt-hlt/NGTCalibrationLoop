@@ -4,6 +4,10 @@ Ported from NGTLoopStep2.py's NewRunAvailable/DAQIsRunning/LastLSRunNumber
 methods as stateless functions. Uses the same `omsapi` import as before, so
 tests still substitute tests/stubs/omsapi and production still uses the real
 oms-api-client copied in next to these scripts (see README.md).
+
+`omsapi` and `requests` are imported where OMS is queried, not when this module
+is: step2 imports it, and a step that never asks OMS anything (Step 2's job, run
+in a pod of a CMSSW image, say) shouldn't need an OMS client installed.
 """
 
 import logging
@@ -12,10 +16,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import requests
-from omsapi import OMSAPI
-
 OMS_BASE_URL = "https://cmsoms.cms/agg/api"
+
+
+def _client():
+    from omsapi import OMSAPI  # pylint: disable=import-outside-toplevel
+
+    return OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
 
 
 @dataclass
@@ -32,7 +39,7 @@ def last_ls_run_number(run_number):
 
     Returns 0 if the OMS query fails.
     """
-    omsapi = OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
+    omsapi = _client()
     q = omsapi.query("runs")
     q.filter("run_number", run_number)
     try:
@@ -62,7 +69,7 @@ def daq_is_running(run_number):
     raising) if the run can't be found or OMS is unreachable.
     """
     logging.info("Checking our run status via OMS...")
-    omsapi = OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
+    omsapi = _client()
 
     logging.info(f"Checking status of *our* latched run: {run_number}")
 
@@ -100,7 +107,7 @@ def run_end_time(run_number):
     module's docstring for why this decision lives there rather than in
     step2.py.
     """
-    omsapi = OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
+    omsapi = _client()
     q = omsapi.query("runs")
     q.filter("run_number", run_number)
     try:
@@ -124,8 +131,10 @@ def find_new_run(calib_config, data_base_path, calibration_name, max_latch_time_
     active or recently ended with enough lumisections and no existing working
     directory. Returns a LatchedRun, or None if nothing eligible was found.
     """
+    import requests  # pylint: disable=import-outside-toplevel
+
     logging.info("Looking for the most recent PROTONS run...")
-    omsapi = OMSAPI(OMS_BASE_URL, "v1", cert_verify=False)
+    omsapi = _client()
     q = omsapi.query("runs")
 
     oms_args = calib_config["step_2_config"]
