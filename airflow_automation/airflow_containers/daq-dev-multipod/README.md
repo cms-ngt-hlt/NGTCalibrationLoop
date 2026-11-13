@@ -5,7 +5,7 @@ on `daq-dev`, the CMS DAQ development cluster, in the tenant `ngt-sakura`. That 
 it doesn't do. This one says what's different here, and assumes you've read the [one-pod daq-dev page](../daq-dev/README.md),
 whose steps 1 to 3 (the tunnel, the Harbor project, the image) are the same.
 
-What `daq-dev` changes:
+What `daq-dev` changes, all in [`values.yaml`](values.yaml), on top of the chart's own:
 
 - **Volumes:** Postgres on `longhorn` (3 replicas on the workers), the fake data and logs on `trident-csi-nfs-dedicated`
   (NetApp's NFS, the only class whose volumes pods on different nodes can share).
@@ -57,30 +57,23 @@ kubectl -n $NS create secret docker-registry harbor-ngt-sakura --docker-server=h
 Keep it for as long as the volumes: Postgres keeps the password it was first set up with. Every member of the tenant's
 owner group can read it.
 
-## 2. Postgres, the volumes, the tools pod
+## 2. Install
 
 ```bash
-kubectl -n $NS apply -k airflow_automation/airflow_containers/daq-dev-multipod/extras/
-kubectl -n $NS get pvc    # Bound once a pod uses them: ngt-airflow-logs only from step 3 on
-```
-
-The tools pod stays `0/1 Ready` until step 3 has set up the fake data.
-
-## 3. Airflow
-
-```bash
-helm repo add apache-airflow https://airflow.apache.org          # once; from your machine, through the internet
+helm repo add apache-airflow https://airflow.apache.org                                 # once
+helm dependency build airflow_automation/airflow_containers/multipod-helm               # Airflow's chart into charts/
 helm plugin install airflow_automation/airflow_containers/multipod-helm/post-renderer   # once per machine
-helm install ngt apache-airflow/airflow --version 1.22.0 -n $NS \
-  -f airflow_automation/airflow_containers/multipod-helm/values.yaml \
+helm install ngt airflow_automation/airflow_containers/multipod-helm -n $NS \
   -f airflow_automation/airflow_containers/daq-dev-multipod/values.yaml \
   --post-renderer ngt-airflow-patches --wait --timeout 15m
 kubectl -n $NS get pods   # six, all 1/1 Running
+kubectl -n $NS get pvc    # three, all Bound
 ```
 
-`helm` goes through the tunnel like `kubectl`, from the same kubeconfig. Only fetching the chart goes to the internet.
+`helm` goes through the tunnel like `kubectl`, from the same kubeconfig. Only `repo add` and `dependency build` go to the
+internet, for Airflow's chart.
 
-## 4. Check the cluster's policy report
+## 3. Check the cluster's policy report
 
 ```bash
 kubectl -n $NS get policyreport
@@ -90,7 +83,7 @@ Expect `forbid-cpu-limits` as a warning on every workload, as for the one-pod (s
 [step 5](../daq-dev/README.md#5-check-the-clusters-policy-report)), and possibly `block-large-images` errors. Anything
 else is new, and worth fixing here. The `emptyDir` failure the one-pod has doesn't apply: its data is on volumes.
 
-## 5. The UI, a scenario
+## 4. The UI, a scenario
 
 ```bash
 kubectl -n $NS get secret ngt-airflow -o jsonpath='{.data.admin-password}' | base64 -d; echo
@@ -102,9 +95,9 @@ from a browser set up as in the one-pod page's [step 6](../daq-dev/README.md#6-o
 `kubectl -n $NS port-forward svc/ngt-api-server 8099:8080`, at `http://localhost:8099`. The login is `admin` with that
 password.
 
-## 6. Reset, upgrade, remove
+## 5. Reset, upgrade, remove
 
-As in the [generic page's step 6](../README.md#6-reset-upgrade-remove), with `-n $NS`, and step 3's `helm` arguments for
+As in the [generic page's step 5](../README.md#5-reset-upgrade-remove), with `-n $NS`, and step 2's `helm` arguments for
 an upgrade. The demo's resets stop Airflow's components around them:
 
 ```bash
@@ -114,8 +107,9 @@ kubectl -n $NS exec deploy/ngt-airflow-tools -- airflow_demo.sh reset-watch
 kubectl -n $NS scale deploy -l tier=airflow --replicas=1
 ```
 
-`helm uninstall ngt -n $NS` keeps the history in Postgres and the volumes. `kubectl delete namespace $NS` removes
-everything: Longhorn's and NetApp's classes here delete a volume with its claim.
+`helm uninstall ngt -n $NS` removes the pods but keeps the three volumes, and with them the history. A later
+`helm install ngt` in the same namespace takes them back. `kubectl delete namespace $NS` removes everything: Longhorn's
+and NetApp's classes here delete a volume with its claim.
 
 **A second instance:** another namespace, then the commands above with `NS` set to it. It gets its own database, data,
 login and host, e.g. `https://ngt-sakura-airflow-demo2.daq-dev.cms.cern.ch`.
@@ -125,10 +119,11 @@ login and host, e.g. `https://ngt-sakura-airflow-demo2.daq-dev.cms.cern.ch`.
 | What you see | Likely cause | What to do |
 |---|---|---|
 | The scheduler's `setup` or the triggerer fails with `Permission denied` under `/ngt-data` | The NFS volume isn't writable for the image's user (UID 50000, GID 0) | `kubectl -n $NS logs deploy/ngt-scheduler -c setup`; ask the sysadmins about the class's export permissions. Meanwhile the data and logs can go on `longhorn`, with all the pods on one node (see below) |
-| A PVC `Pending` beyond step 3 | Quota, or the class can't make the volume | `kubectl -n $NS describe pvc`; `kubectl describe resourcequota` |
+| A PVC `Pending` after step 2 | Quota, or the class can't make the volume | `kubectl -n $NS describe pvc`; `kubectl describe resourcequota` |
 | Pods `CreateContainerConfigError` | No Secret `ngt-airflow` in this namespace | Step 1 |
-| `Error: plugin "ngt-airflow-patches" not found` | The post-renderer isn't installed on this machine | Step 3's `helm plugin install` |
-| `helm repo add` times out | The machine has no internet: the chart comes from airflow.apache.org | Run Helm where there is, still through the tunnel |
+| `found in Chart.yaml, but missing in charts/ directory: airflow` | Airflow's chart isn't downloaded yet | Step 2's `helm dependency build` |
+| `Error: plugin "ngt-airflow-patches" not found` | The post-renderer isn't installed on this machine | Step 2's `helm plugin install` |
+| `helm repo add` or `dependency build` times out | The machine has no internet: Airflow's chart comes from airflow.apache.org | Run Helm where there is, still through the tunnel |
 | Two instances, one UI | Two namespaces can't share a host, and here they never do | `kubectl get ingress -A` |
 | Anything about the tunnel, kubeconfig, Harbor or the CA | As for the one-pod | [Its table](../daq-dev/README.md#if-something-goes-wrong) |
 
