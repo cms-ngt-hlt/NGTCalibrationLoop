@@ -15,6 +15,7 @@ Airflow DAGs against the fake OMS/EOS/CMSSW toolchain. No real data, no real upl
 | The same on CERN's OpenShift, as a worked example | [`openshift/`](openshift/README.md) | a CERN account |
 | The same on CMS DAQ's `daq-dev` cluster, as another | [`daq-dev/`](daq-dev/README.md) | a CMS account, a tenant there |
 | Keep its history, with one pod per Airflow component | [Several pods on Kubernetes](#several-pods-on-kubernetes-with-persistent-storage) (`multipod-helm/`) | a cluster with shareable volumes, `kubectl`, Helm 4, Docker |
+| The same on `daq-dev` | [`daq-dev-multipod/`](daq-dev-multipod/README.md) | a CMS account, a tenant there |
 
 All of them come from one image, [`Dockerfile`](Dockerfile): Airflow 3.3.1 plus this repo at `/opt/ngt`.
 

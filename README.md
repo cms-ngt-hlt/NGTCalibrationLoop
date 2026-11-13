@@ -724,7 +724,7 @@ image, in three shapes. Its [README](airflow_automation/airflow_containers/READM
 - **Several pods on Kubernetes, with persistent storage** (`multipod-helm/`): one pod per Airflow component from
   Airflow's own Helm chart, with Postgres, the fake data and the logs on persistent volumes next to it, so the history
   outlives any pod and a reinstall. Helm 4, with a post-renderer plugin for what the chart's values can't set; any
-  namespace, several at once.
+  namespace, several at once. On `daq-dev` as well (`daq-dev-multipod/`), with its own tutorial.
 
 The image works as an arbitrary non-root user with no capabilities, the strictest way a cluster can run it, and the
 Compose files run it that way. None of this changes what "Deploying on the calibration nodes" above says about the
