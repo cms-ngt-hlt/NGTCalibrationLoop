@@ -47,14 +47,16 @@ ngt_watch_* stops all four watchers.
 """
 
 import logging
+import os
 from datetime import datetime, timezone
 
+import yaml
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG, Asset, AssetWatcher
 
 from airflow_dags import _process_tasks as pp
 from airflow_dags import triggers
-from ngt_calibration_loop import step2
+from ngt_calibration_loop import run_step, step2
 
 CALIBRATIONS = pp.CALIBRATIONS
 
@@ -64,6 +66,12 @@ RUN_PRIMER_DAG_ID = "ngt_watch_run_primer"
 # sets short values for the live-test setup).
 _WATCH_POLL_SECONDS = pp.FILE_POLL_INTERVAL_SECONDS
 _RUN_END_GRACE_SECONDS = pp.RUN_END_GRACE_SECONDS
+
+# Steps 2, 3 and 4's harvest run in the worker, as the library's step runner, unless the deployment gives a pod
+# template: the YAML of a Pod, in NGT_STEP_POD_TEMPLATE (multipod-helm's values-step-pods.yaml). Then each runs in a
+# pod of its own built from it (KubernetesPodOperator), as the step runner's command line: in another image, such as
+# a CMSSW one, if the template says so. Read when the DAGs are parsed, so a change takes a restart.
+STEP_POD_TEMPLATE = yaml.safe_load(os.environ.get("NGT_STEP_POD_TEMPLATE") or "null")
 
 
 def _process_dag_id(calibration):
@@ -153,6 +161,43 @@ def _build_run_primer_dag():
     return dag
 
 
+def _run_and_file(dag_run, triggering_asset_events):
+    """The run and file this DAG run is for, as the step pods' arguments: what the PythonOperators read themselves."""
+    return pp.run_and_file_from_context({"dag_run": dag_run, "triggering_asset_events": triggering_asset_events})
+
+
+def _step_task(calibration, task_id, make_callable):
+    if STEP_POD_TEMPLATE is None:
+        return PythonOperator(task_id=task_id, python_callable=make_callable(calibration), **pp.LAUNCH_RETRY_KWARGS)
+
+    # Only where pods are wanted: elsewhere the image needn't have Airflow's Kubernetes provider.
+    from airflow.providers.cncf.kubernetes.operators.pod import (  # pylint: disable=import-outside-toplevel
+        KubernetesPodOperator,
+    )
+
+    return KubernetesPodOperator(
+        task_id=task_id,
+        pod_template_dict=STEP_POD_TEMPLATE,
+        in_cluster=True,
+        # The template's container runs `python3 -m ngt_calibration_loop.run_step "$@"` in whatever environment it
+        # sets up; these are the "$@".
+        arguments=[
+            task_id,
+            "--calibration",
+            calibration,
+            "--run",
+            "{{ ngt_run_and_file(dag_run, triggering_asset_events)[0] }}",
+            "--file",
+            "{{ ngt_run_and_file(dag_run, triggering_asset_events)[1] }}",
+        ],
+        skip_on_exit_code=run_step.EXIT_NOTHING_TO_DO,
+        get_logs=True,
+        on_finish_action="delete_succeeded_pod",  # a failed one stays, to look at
+        startup_timeout_seconds=600,  # a first pull of a CMSSW image, or a node to free up
+        **pp.LAUNCH_RETRY_KWARGS,
+    )
+
+
 def _build_process_dag(calibration):
     with DAG(
         dag_id=_process_dag_id(calibration),
@@ -164,16 +209,12 @@ def _build_process_dag(calibration):
         max_active_runs=10,
         default_args=pp.DEFAULT_ARGS,
         tags=["ngt", "watch", "process", calibration],
+        user_defined_macros={"ngt_run_and_file": _run_and_file},
     ) as dag:
-        step2_express = PythonOperator(
-            task_id="step2_express", python_callable=pp.make_step2_express_callable(calibration), **pp.LAUNCH_RETRY_KWARGS
-        )
-        step3_alca = PythonOperator(
-            task_id="step3_alca", python_callable=pp.make_step3_alca_callable(calibration), **pp.LAUNCH_RETRY_KWARGS
-        )
-        step4_harvest = PythonOperator(
-            task_id="step4_harvest", python_callable=pp.make_step4_harvest_callable(calibration), **pp.LAUNCH_RETRY_KWARGS
-        )
+        step2_express = _step_task(calibration, "step2_express", pp.make_step2_express_callable)
+        step3_alca = _step_task(calibration, "step3_alca", pp.make_step3_alca_callable)
+        step4_harvest = _step_task(calibration, "step4_harvest", pp.make_step4_harvest_callable)
+        # The fake conditions DB is the Airflow image's, and a real upload goes nowhere from a cluster: in the worker.
         step4_upload = PythonOperator(
             task_id="step4_upload", python_callable=pp.make_step4_upload_callable(calibration), **pp.UPLOAD_RETRY_KWARGS
         )

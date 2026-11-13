@@ -401,6 +401,37 @@ def test_run_and_file_from_context_skips_when_neither_present():
         pp.run_and_file_from_context({"dag_run": SimpleNamespace(conf={})})
 
 
+# --- steps in pods of their own (NGT_STEP_POD_TEMPLATE) ------------------------
+
+
+def test_step_pods_get_the_same_run_and_file_the_python_tasks_read():
+    dag_run = SimpleNamespace(conf={"run_number": "398601", "file": "/eos/x.root"})
+    assert watch._run_and_file(dag_run, {}) == ("398601", "/eos/x.root")
+    events = make_triggering({"run_number": "398601", "file": "/eos/y.root"})
+    assert watch._run_and_file(SimpleNamespace(conf={}), events) == ("398601", "/eos/y.root")
+
+
+def test_steps_run_in_pods_from_the_template_when_the_deployment_gives_one(monkeypatch):
+    pytest.importorskip("airflow.providers.cncf.kubernetes")
+    template = {"apiVersion": "v1", "kind": "Pod", "spec": {"containers": [{"name": "base", "image": "cmssw"}]}}
+    monkeypatch.setattr(watch, "STEP_POD_TEMPLATE", template)
+
+    dag = watch._build_process_dag("EcalPedestals")
+    kinds = {task.task_id: type(task).__name__ for task in dag.tasks}
+    assert kinds == {
+        "step2_express": "KubernetesPodOperator",
+        "step3_alca": "KubernetesPodOperator",
+        "step4_harvest": "KubernetesPodOperator",
+        "step4_upload": "PythonOperator",
+    }
+    step2 = dag.get_task("step2_express")
+    assert step2.pod_template_dict == template
+    assert step2.arguments[:3] == ["step2_express", "--calibration", "EcalPedestals"]
+    assert "ngt_run_and_file" in step2.arguments[4] and "ngt_run_and_file" in step2.arguments[6]
+    assert list(step2.skip_on_exit_code) == [99]
+    assert step2.retries == pp.LAUNCH_RETRY_KWARGS["retries"]
+
+
 # --- thin chain smoke test through the shared _process_tasks callables ------
 
 
