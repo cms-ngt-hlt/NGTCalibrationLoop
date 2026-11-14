@@ -127,13 +127,14 @@ def prepare_alca_prompt_job(ctx: RunContext, files_to_process) -> Optional[JobSp
     lumisections = lineage.lumisections_of(input_files)
 
     ngt_params = ctx.ngt_params
+    area = config.release_area(ngt_params) or ctx.working_dir  # without one, the area Step 2 made in the run's directory
     alca_job_file = job_dir / "ALCAOUTPUT.sh"
     with alca_job_file.open("w", encoding="utf-8") as f:
         f.write(
             f"""#!/bin/bash -ex
 
 export SCRAM_ARCH={ngt_params["SCRAM_ARCH"]}
-cd {ctx.working_dir}/{ngt_params["CMSSW_VERSION"]}/src
+cd {area}/{ngt_params["CMSSW_VERSION"]}/src || exit 1
 cmsenv
 cd -
 

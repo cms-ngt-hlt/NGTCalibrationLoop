@@ -22,6 +22,14 @@ def load_ngt_parameters():
         return json.load(f)
 
 
+def release_area(ngt_params):
+    """ngtParameters.jsn's CMSSW_AREA: the directory holding the one release area, <CMSSW_AREA>/<CMSSW_VERSION>, that
+    every step's jobs cmsenv in, made once beforehand. None if it names none: then Step 2's jobs make an area in their
+    run's directory, which Step 3's use, and Step 4's use their calibration's cmssw_base_path. Real scram refuses to
+    make an area twice, and two jobs of one run making it at once race."""
+    return ngt_params.get("CMSSW_AREA") or None
+
+
 def load_calibration_config(calibration_name):
     """Load a calibration workflow YAML, honoring the NGT_CALIBRATION_YAML_DIR
     override used by tests."""

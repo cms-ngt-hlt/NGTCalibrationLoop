@@ -580,7 +580,7 @@ class NGTLoopStep2:
 
 export SCRAM_ARCH={self.scramArch}
 cmsrel {self.cmsswVersion}
-cd {self.cmsswVersion}/src
+cd {self.cmsswVersion}/src || exit 1
 cmsenv
 cd -
 

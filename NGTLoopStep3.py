@@ -288,7 +288,7 @@ class NGTLoopStep3:
                 f"""#!/bin/bash -ex
 
 export SCRAM_ARCH={self.scramArch}
-cd {self.workingDir}/{self.cmsswVersion}/src
+cd {self.workingDir}/{self.cmsswVersion}/src || exit 1
 cmsenv
 cd -
 

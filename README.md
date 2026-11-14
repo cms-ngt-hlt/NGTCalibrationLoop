@@ -196,7 +196,10 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
 The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
 state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
 via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
-(they default to those same production paths, so deployment behavior is unchanged),
+(they default to those same production paths, so deployment behavior is unchanged; the library,
+`ngt_calibration_loop/`, also takes `INPUT_URL_PREFIX`, by default `root://eoscms.cern.ch/`, and
+`CMSSW_AREA`, the directory of one release area every step's jobs `cmsenv` in, made beforehand:
+without it, each step 2 job makes one in its run's directory),
 and each script now guards its argument parsing / main loop behind
 `if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
 launching anything.

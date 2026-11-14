@@ -98,7 +98,7 @@ def build_run_context(calibration_name, run_number):
         start_time = datetime.now(timezone.utc)
         start_log.write_text(start_time.isoformat(), encoding="utf-8")
 
-    cmssw_path = calib_config["step_4_config"]["cmssw_base_path"]
+    cmssw_path = config.release_area(ngt_params) or calib_config["step_4_config"]["cmssw_base_path"]
     cond_auth_path = os.path.expanduser(ngt_params.get("COND_AUTH_PATH", "/nfshome0/sakura"))
     os.environ["COND_AUTH_PATH"] = cond_auth_path
 

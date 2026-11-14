@@ -231,6 +231,8 @@ def prepare_express_job(ctx: RunContext, ls_to_process) -> Optional[JobSpec]:
     scram_arch = ngt_params["SCRAM_ARCH"]
     cmssw_version = ngt_params["CMSSW_VERSION"]
     global_tag = ngt_params["GLOBAL_TAG"]
+    area = config.release_area(ngt_params)
+    release = f"cd {area}/{cmssw_version}/src" if area else f"cmsrel {cmssw_version}\ncd {cmssw_version}/src"
 
     script_path = Path(ctx.working_dir) / temp_script_name
     with open(script_path, "w", encoding="utf-8") as f:
@@ -238,8 +240,7 @@ def prepare_express_job(ctx: RunContext, ls_to_process) -> Optional[JobSpec]:
             f"""#!/bin/bash -ex
 
 export SCRAM_ARCH={scram_arch}
-cmsrel {cmssw_version}
-cd {cmssw_version}/src
+{release} || exit 1
 cmsenv
 cd -
 
