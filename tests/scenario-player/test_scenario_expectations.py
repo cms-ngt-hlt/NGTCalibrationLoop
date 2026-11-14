@@ -142,6 +142,17 @@ def test_the_same_real_payload_twice_is_a_duplicate_and_two_different_ones_are_n
     assert check(expect, [real_row(1), real_row(2, sha="b" * 64)]).ok
 
 
+def test_a_real_payload_with_the_librarys_lineage_is_checked_like_any_other():
+    lineage_known = dict(real_row(1), lumisections=[51, 52, 53])
+    assert check({"payloads": [one("51-53")]}, [lineage_known]).ok
+    assert not check({"payloads": [one("51-54")]}, [lineage_known]).ok
+    report = ngt_expectations.format_report(check({"payloads": [one("51-53")]}, [lineage_known]))
+    assert "LS 51-53 (a real payload, 4096 bytes)" in report
+    # Then the same lumisections twice is the duplicate, whatever the files' checksums.
+    again = dict(real_row(2, sha="b" * 64), lumisections=[51, 52, 53])
+    assert not check({"payloads": [one("51-53")], "allow_extra": True}, [lineage_known, again]).ok
+
+
 # --- the happy paths -----------------------------------------------------------
 
 

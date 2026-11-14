@@ -9,8 +9,8 @@ travel the real data path, step2 -> step3 -> step4.
 
 The ledger, $NGT_DEV_HOME/conddb/payloads.jsonl, gets one JSON line per successful fake upload,
 numbered under a lock; a scenario's expect: block is checked against it. A real harvest's .db, from
-steps that ran CMSSW for real, gets a row too, marked `"payload": "real"`: its lumisections aren't
-in it, so the row has none, and its size and sha256 instead.
+steps that ran CMSSW for real, gets a row too, marked `"payload": "real"`, with its size and sha256.
+Its lumisections aren't in it: the row has those the library's lineage beside it names, or none.
 """
 import hashlib
 import json
@@ -93,11 +93,21 @@ def real_payload(db_file):
     return {
         "calibration": scope.get("calibration"),
         "run": _as_int(scope.get("run")),
-        "lumisections": None,
+        "lumisections": _lineage_lumisections(db_file),
         "payload": "real",
         "payload_bytes": len(data),
         "sha256": hashlib.sha256(data).hexdigest(),
     }
+
+
+def _lineage_lumisections(db_file):
+    """The lumisections the library's lineage beside a payload says it holds (ngt_calibration_loop/lineage.py: a
+    <file>.lineage.json), or None without one."""
+    try:
+        with open(f"{db_file}.lineage.json", "r", encoding="utf-8") as f:
+            return sorted(int(ls) for ls in json.load(f)["lumisections"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def lumisections_of_input(path):

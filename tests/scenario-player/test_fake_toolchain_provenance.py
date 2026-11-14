@@ -224,6 +224,20 @@ def test_upload_records_a_real_payload_by_its_job_directory(chain):
     assert "a real payload" in result.stdout
 
 
+def test_upload_takes_a_real_payloads_lumisections_from_the_librarys_lineage(chain):
+    harvest = chain / "harvestJob_abc"
+    harvest.mkdir()
+    (harvest / "NGTCalibEcalPedestals.db").write_bytes(fake_conddb.SQLITE_MAGIC + b"\x10\x00 a conditions payload")
+    (harvest / "NGTCalibEcalPedestals.db.lineage.json").write_text(
+        json.dumps({"lumisections": [1247, 1246], "inputs": ["x.root"]}), encoding="utf-8"
+    )
+
+    _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest)
+
+    (row,) = fake_conddb.read_ledger()
+    assert (row["payload"], row["lumisections"]) == ("real", [1246, 1247])
+
+
 def test_edmfileutil_reads_a_file_through_either_prefix(chain):
     raw = chain / "run398600_ls0051_some-real-name.root"
     raw.write_bytes(b"(FAKE) raw data placeholder\n")

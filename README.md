@@ -535,11 +535,16 @@ What processes the file depends on where the steps run, not on the scenario:
   cluster's CMSSW values.
 
 **The upload stays the fake one.** It records a real `.db` too, by its job directory, as
-`"payload": "real"` with its size and checksum: its lumisections aren't in it. It refuses an empty one,
-which a harvester leaves when it found too little.
+`"payload": "real"` with its size and checksum. Its lumisections aren't in it: the row takes them from
+the library's lineage beside it (`ngt_calibration_loop/lineage.py`). Each step writes
+`<output>.lineage.json` once its job succeeds: step 2 from what `edmFileUtil` read off its input,
+steps 3 and 4 from their inputs' lineage. The upload refuses an empty `.db`, but the harvest doesn't
+get there with one: an empty payload, which a harvester with too few entries leaves, is "no payload
+yet", and the harvest is skipped.
 
-**Checking a real run:** an `expect:` entry without `lumisections` matches its calibration and run alone.
-Such scenarios live in `scenario-player/scenarios/real-cmssw/`, away from the ones every machine can play.
+**Checking a real run:** an `expect:` entry is checked against the lineage's lumisections. One without
+`lumisections` matches its calibration and run alone, for a payload made without lineage. Such
+scenarios live in `scenario-player/scenarios/real-cmssw/`, away from the ones every machine can play.
 
 Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_conddb.py` and
 `test_scenario_expectations.py`; `tests/fsm-loops/test_scenarios.py` checks the blocks of

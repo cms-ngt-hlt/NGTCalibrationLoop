@@ -15,10 +15,10 @@ calibration_config:
           - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
           - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
 
-# A real payload: its lumisections aren't recorded.
+# A real payload: its lumisections are what the library's lineage beside it says.
 expect:
   settle_timeout: 1800
   quiet_for: 60
   allow_extra: {before: true, after: true}
   payloads:
-    - {calibration: EcalPedestals, run: 403634}
+    - {calibration: EcalPedestals, run: 403634, lumisections: 1246-1259}

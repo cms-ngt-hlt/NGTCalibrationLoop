@@ -19,8 +19,8 @@
 `payloads:` is the expected sequence of uploads: every ledger row must be matched by an entry or
 allowed by `allow_extra`. The flags apply to the whole block; README.md's "Validating the result"
 says why each exists. An entry without `lumisections` matches its calibration and run whatever they
-cover: what a real payload, from steps that ran CMSSW for real, can be checked against, as its
-lumisections aren't recorded.
+cover. A real payload, from steps that ran CMSSW for real, has lumisections only where the library's
+lineage beside it says (ngt_calibration_loop/lineage.py); one without can only be checked that way.
 """
 import re
 import time
@@ -260,16 +260,19 @@ def _row_ls(row):
 
 
 def _is_real(row):
-    """A real harvest's payload (fake_conddb.real_payload): its lumisections aren't known."""
+    """A real harvest's payload (fake_conddb.real_payload)."""
     return row.get("payload") == "real"
 
 
+def _ls_unknown(row):
+    """A real payload without the library's lineage beside it: what it holds isn't known."""
+    return row.get("lumisections") is None
+
+
 def _describe_row(row):
-    covers = (
-        f"LS unknown (a real payload, {row.get('payload_bytes')} bytes)"
-        if _is_real(row)
-        else f"LS {format_ls_set(_row_ls(row))}"
-    )
+    covers = "LS unknown" if _ls_unknown(row) else f"LS {format_ls_set(_row_ls(row))}"
+    if _is_real(row):
+        covers += f" (a real payload, {row.get('payload_bytes')} bytes)"
     return f"seq {row.get('seq')}  {row.get('calibration')}/run{row.get('run')}  {covers}"
 
 
@@ -344,10 +347,10 @@ def _check_duplicates(key_rows, expectations, problems):
         return
     seen = {}
     for row in key_rows:
-        # A real payload's lumisections aren't known: the same file twice is the duplicate.
-        signature = ("real", row.get("sha256")) if _is_real(row) else frozenset(_row_ls(row))
+        # Where a real payload's lumisections aren't known, the same file twice is the duplicate.
+        signature = ("real", row.get("sha256")) if _ls_unknown(row) else frozenset(_row_ls(row))
         if signature in seen:
-            what = "payload" if _is_real(row) else "lumisection set"
+            what = "payload" if _ls_unknown(row) else "lumisection set"
             problems.append(
                 f"duplicate upload: seq {row.get('seq')} repeats the {what} already uploaded at "
                 f"seq {seen[signature]} ({_describe_row(row)}) -- allow with allow_duplicates: true"
@@ -358,10 +361,10 @@ def _check_duplicates(key_rows, expectations, problems):
 
 def _check_empty_payloads(rows, problems):
     """A payload covering no lumisections fails whatever the flags: a harvest only runs when there
-    is something to harvest, so it means a broken upload, not an extra. A real payload's aren't known,
-    and an empty real one is refused by the uploader itself."""
+    is something to harvest, so it means a broken upload, not an extra. A real payload's may not be
+    known, and an empty real one is refused by the uploader itself."""
     for row in rows:
-        if not _row_ls(row) and not _is_real(row):
+        if not _row_ls(row) and not _ls_unknown(row):
             problems.append(
                 f"payload with no lumisections: {_describe_row(row)} -- a harvest only runs when "
                 "there is something to harvest, so either nothing of substance was uploaded or the "
