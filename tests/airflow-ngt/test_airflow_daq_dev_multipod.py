@@ -6,7 +6,14 @@ policies report, as test_airflow_daq_dev.py does for the one-pod. Nothing names 
 tenant gets its own instance, under its own host. The rules are the ones read from the cluster, in ../daq-dev/README.md.
 """
 
+import json
+import os
 import re
+import shutil
+import socket
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -52,9 +59,10 @@ def _check_pod(name, pod, labels):
         tag = container["image"].rsplit(":", 1)[1]
         assert tag and tag != "latest" and "/" not in tag, (name, container["image"])
         requests, limits = container["resources"]["requests"], container["resources"]["limits"]
-        for resource in ("cpu", "memory"):
-            for amounts in (requests, limits):
-                assert CONTAINER_MIN[resource] <= _amount(resource, amounts[resource]) <= CONTAINER_MAX[resource], name
+        # A CPU limit may be left out: forbid-cpu-limits even asks for that.
+        assert {"cpu", "memory"} <= set(requests) and "memory" in limits, (name, container["name"])
+        for resource, amount in [*requests.items(), *limits.items()]:
+            assert CONTAINER_MIN[resource] <= _amount(resource, amount) <= CONTAINER_MAX[resource], name
         memory = _amount("memory", requests["memory"]), _amount("memory", limits["memory"])
         assert memory[0] < memory[1] <= 2.5 * memory[0], (name, container["name"])
         assert container["securityContext"]["readOnlyRootFilesystem"] is True, (name, container["name"])
@@ -119,6 +127,105 @@ def test_step_pods_pass_the_clusters_checks_and_run_where_nfs_mounts(render_char
     pod = yaml.safe_load(config["data"]["pod.yaml"])
     _check_pod("step pod", pod["spec"], pod["metadata"]["labels"])
     assert pod["spec"]["nodeSelector"] == NFS_NODES
+
+
+CMSSW_VALUES = CONTAINERS / "daq-dev-multipod" / "values-cmssw.yaml"
+
+
+def test_cmssw_step_pods_pass_the_clusters_checks_with_the_release_from_the_nodes(render_chart):
+    docs = render_chart("ngt-sakura-anything", VALUES, CONTAINERS / "multipod-helm" / "values-step-pods.yaml", CMSSW_VALUES)
+    by_name = {(d["kind"], d["metadata"]["name"]): d for d in docs}
+    template = by_name[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"]
+    pod, files = yaml.safe_load(template), by_name[("ConfigMap", "ngt-airflow-step-files")]["data"]
+    assert not re.search(r"\{[{%#]", template), "KubernetesPodOperator renders the template with Jinja"
+    _check_pod("step pod", pod["spec"], pod["metadata"]["labels"])
+    (base,) = pod["spec"]["containers"]
+    assert base["image"].startswith("harbor.cms/it-registry-proxy/docker.io/cmssw/el8:") and "@sha256:" in base["image"]
+    assert "cpu" not in base["resources"]["limits"]
+    # Airflow's user: the scheduler writes in the same runs' directories.
+    assert pod["spec"]["securityContext"]["runAsUser"] == 50000
+    claims = {(d["metadata"]["name"], d["spec"]["resources"]["requests"]["storage"]) for d in docs if d["kind"] == "PersistentVolumeClaim"}
+    assert ("ngt-airflow-data", "20Gi") in claims, "room for the inputs and the runs' outputs"
+    # The el8 install was made under /opt/offline, and only works mounted there.
+    (offline,) = [v for v in pod["spec"]["volumes"] if "hostPath" in v]
+    assert offline["hostPath"]["path"] == "/opt/offline-el8"
+    assert {"name": offline["name"], "mountPath": "/opt/offline", "readOnly": True} in base["volumeMounts"]
+    assert pod["spec"]["nodeSelector"] == NFS_NODES, "NFS, and the el8 volume, are on rubu nodes"
+    assert pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    assert set(files) == {"frontier_proxy.py", "site-local-config.xml", "storage.json"}
+    assert '<proxy url="http://localhost:3128"/>' in files["site-local-config.xml"]
+    json.loads(files["storage.json"])
+
+
+def test_the_cmssw_step_script_is_valid_bash():
+    script = yaml.safe_load(CMSSW_VALUES.read_text(encoding="utf-8"))["stepPods"]["script"]
+    subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+def test_the_frontier_forwarder_puts_the_port_back_into_the_host_header(tmp_path):
+    """daq-dev's P5 proxy answers 400 to Frontier's own requests: their Host header has no port. The step pods send
+    them through frontier_proxy.py, which takes the Host from the URL."""
+    source = yaml.safe_load(CMSSW_VALUES.read_text(encoding="utf-8"))["stepPods"]["files"]["frontier_proxy.py"]
+    (tmp_path / "frontier_proxy.py").write_text(source, encoding="utf-8")
+    seen = []
+    upstream = socket.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+
+    def answer():
+        conn, _ = upstream.accept()
+        with conn:
+            seen.append(conn.recv(65536))
+            conn.sendall(b"HTTP/1.0 200 OK\r\n\r\nconditions")
+
+    threading.Thread(target=answer, daemon=True).start()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        listen_port = probe.getsockname()[1]
+    forwarder = subprocess.Popen(
+        [sys.executable, str(tmp_path / "frontier_proxy.py"), "127.0.0.1", str(upstream.getsockname()[1]), str(listen_port)],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        forwarder.stdout.readline()  # it says it's listening
+        with socket.create_connection(("127.0.0.1", listen_port), timeout=10) as client:
+            client.sendall(b"GET http://cmsfrontier.cern.ch:8000/FrontierProd/x HTTP/1.0\r\nHost: cmsfrontier.cern.ch\r\n\r\n")
+            reply = client.recv(65536)
+    finally:
+        forwarder.kill()
+        upstream.close()
+    assert reply.startswith(b"HTTP/1.0 200")
+    assert b"Host: cmsfrontier.cern.ch:8000\r\n" in seen[0] and b"Host: cmsfrontier.cern.ch\r\n" not in seen[0]
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") is None, reason="needs a POSIX bash")
+def test_an_input_goes_up_in_parts_and_only_once(tmp_path):
+    """upload_input.sh, through a stand-in kubectl that runs each command here, with the volume in tmp_path."""
+    bin_dir, volume = tmp_path / "bin", tmp_path / "volume"
+    bin_dir.mkdir()
+    volume.mkdir()
+    kubectl = bin_dir / "kubectl"
+    kubectl.write_text(
+        '#!/bin/bash\nwhile [ "$1" != -- ]; do shift; done; shift\n'
+        'args=(); for a in "$@"; do args+=("${a//\\/ngt-data/$VOLUME}"); done\nexec "${args[@]}"\n',
+        encoding="utf-8",
+    )
+    kubectl.chmod(0o755)
+    data = os.urandom(2 * 1024 * 1024 + 123)
+    (tmp_path / "run403634.root").write_bytes(data)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "VOLUME": str(volume), "NS": "ngt-any", "PART_MB": "1"}
+
+    def upload(*name):
+        script = CONTAINERS / "daq-dev-multipod" / "upload_input.sh"
+        args = ["bash", str(script), str(tmp_path / "run403634.root"), *name]
+        return subprocess.run(args, env=env, capture_output=True, text=True, check=True).stdout
+
+    assert upload().count("part ") == 3
+    assert (volume / "inputs" / "run403634.root").read_bytes() == data
+    assert [p.name for p in (volume / "inputs").iterdir()] == ["run403634.root"]
+    assert "there already" in upload()
+    upload("370f0750.root")  # the name a scenario gives it
+    assert (volume / "inputs" / "370f0750.root").read_bytes() == data
 
 
 def test_every_pod_passes_the_clusters_audited_checks(render_chart):

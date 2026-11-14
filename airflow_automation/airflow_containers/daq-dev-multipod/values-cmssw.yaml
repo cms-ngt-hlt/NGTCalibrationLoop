@@ -1,0 +1,188 @@
+# Steps 2, 3 and 4's harvest in CMSSW pods, on real files: on top of values.yaml and ../multipod-helm/values-step-pods.yaml,
+# for an instance of its own (README.md, "Real files, real CMSSW"):
+#   helm install ngt ../multipod-helm/ -n <namespace> -f values.yaml -f ../multipod-helm/values-step-pods.yaml \
+#     -f values-cmssw.yaml --post-renderer ngt-airflow-patches
+# What the cluster offers for it, found with test pods on 2026-11-13: CMSSW installed on some rubu nodes, and conditions
+# through the P5 proxy. Everything else stays the scenario player's: OMS, EOS, and the upload, which runs in the
+# scheduler (its fake uploadConditions.py records the real payload).
+
+# The input files, which the scenarios name under $NGT_DEV_HOME/../inputs (4.2 GB for run 403634's), and each run's
+# outputs: step 3 leaves 600 MB.
+sharedVolumes:
+  data:
+    size: 20Gi
+
+stepPods:
+  # CMS's el8 image, through Harbor's cache of Docker Hub. It has no release: the nodes do.
+  image: harbor.cms/it-registry-proxy/docker.io/cmssw/el8:x86_64-grid@sha256:d5e4f67f75efd8cb61e509dc519eca8a4c6d1b41c5d933c46dcdfde943690a4d
+  # Airflow's user, whose files these pods share: the scheduler writes in the runs' directories too. Its name, for
+  # the tools that ask, as the image has no entry for it.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 50000
+    runAsGroup: 0
+    fsGroup: 0
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile:
+      type: RuntimeDefault
+  env:
+    - {name: NGT_DEV_HOME, value: /ngt-data/demo-env}
+    - {name: USER, value: airflow}
+    - {name: HOME, value: /tmp/home}
+    # On the data volume: an emptyDir has to stay under 400Mi here.
+    - {name: TMPDIR, value: /ngt-data/tmp}
+  # Step 2 runs with 8 threads. No CPU limit, as forbid-cpu-limits asks. At most 2.9 GiB measured.
+  resources:
+    requests: {cpu: "8", memory: 4Gi}
+    limits: {cpu: null, memory: 8Gi}
+  # The el8 install, made under /opt/offline and only working there, from the nodes that have it: rubu nodes, as
+  # NFS needs (values.yaml), but not all of them.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values: [d3vsrv-c1b12-17-01, d3vsrv-c1b12-19-01, d3vsrv-c1b12-23-01]
+  extraVolumes:
+    - name: offline
+      hostPath:
+        path: /opt/offline-el8
+        type: Directory
+  extraVolumeMounts:
+    - {name: offline, mountPath: /opt/offline, readOnly: true}
+  # Runs with the step's arguments as "$@". Not `set -e`: cmsset_default.sh isn't written for it.
+  script: |-
+    mkdir -p "$HOME" "$TMPDIR" /tmp/siteconf/JobConfig
+    cp /opt/ngt-step-files/site-local-config.xml /tmp/siteconf/JobConfig/
+    cp /opt/ngt-step-files/storage.json /tmp/siteconf/
+    export SITECONFIG_PATH=/tmp/siteconf
+    # Conditions through the forwarder, checked first, so a broken route says so in the task's log. The image's
+    # Python 3.6 runs it, before cmsenv puts the release's first on PATH.
+    /usr/bin/python3 /opt/ngt-step-files/frontier_proxy.py cmsproxy.cms 3128 3128 > /tmp/frontier_proxy.log 2>&1 &
+    sleep 1
+    code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' -x http://localhost:3128 http://cmsfrontier.cern.ch:8000/FrontierProd/)
+    if [ "$code" != 200 ]; then
+      echo "Frontier isn't reachable through frontier_proxy.py (HTTP $code)"
+      cat /tmp/frontier_proxy.log
+      exit 1
+    fi
+
+    # Exports cmsrel and cmsenv, which the library's job scripts call.
+    source /opt/offline/cmsset_default.sh
+    param() { sed -n "s/.*\"$1\" *: *\"\([^\"]*\)\".*/\1/p" "$NGT_DEV_HOME/ngtParameters.jsn"; }
+    export SCRAM_ARCH=$(param SCRAM_ARCH)
+    release=$(param CMSSW_VERSION)
+    # The instance's release area, which step 4's job cmsenvs in, made by the first pod that needs it: the scenario
+    # player's setup leaves only a placeholder there. It gives this shell the release's Python (3.9, with PyYAML),
+    # which the library needs.
+    area="$NGT_DEV_HOME/cmssw_home"
+    (
+      command -v flock > /dev/null && flock 9
+      if [ ! -d "$area/$release/.SCRAM" ]; then
+        rm -rf "${area:?}/$release" && mkdir -p "$area" && cd "$area" && scram -a "$SCRAM_ARCH" project CMSSW "$release"
+      fi
+    ) 9> "$area.lock" || exit 1
+    cd "$area/$release/src" && eval "$(scram runtime -sh)" && cd - > /dev/null || exit 1
+
+    # The library from the data volume, where the scheduler's setup copies it.
+    export PYTHONPATH="$(dirname "$NGT_DEV_HOME")/lib${PYTHONPATH:+:$PYTHONPATH}"
+    export NGT_PARAMETERS_PATH="$NGT_DEV_HOME/ngtParameters.jsn" NGT_CALIBRATION_YAML_DIR="$NGT_DEV_HOME/calibrationYAML"
+    exec python3 -m ngt_calibration_loop.run_step "$@"
+  files:
+    # From a pod, Frontier is only reachable through the P5 proxy cmsproxy.cms:3128, which answers 400 when the Host
+    # header has no port, as Frontier's client sends it. This forwards each request with the Host taken from its URL.
+    frontier_proxy.py: |
+      """A forward proxy for Frontier on localhost: each request to the upstream proxy, its Host header from the URL.
+
+      usage: python3 frontier_proxy.py [upstream_host [upstream_port [listen_port]]]. Stdlib only, Python 3.6 (the
+      image's).
+      """
+
+      import re
+      import socket
+      import socketserver
+      import sys
+
+      UPSTREAM = (sys.argv[1] if len(sys.argv) > 1 else "cmsproxy.cms", int(sys.argv[2]) if len(sys.argv) > 2 else 3128)
+      LISTEN = ("127.0.0.1", int(sys.argv[3]) if len(sys.argv) > 3 else 3128)
+      DROP = {b"host", b"connection", b"proxy-connection", b"keep-alive"}
+
+
+      class Handler(socketserver.BaseRequestHandler):
+          def handle(self):
+              client = self.request
+              client.settimeout(60)
+              data = b""
+              while b"\r\n\r\n" not in data:
+                  chunk = client.recv(65536)
+                  if not chunk or len(data) > 1 << 20:
+                      return
+                  data += chunk
+              head, _, body = data.partition(b"\r\n\r\n")
+              lines = head.split(b"\r\n")
+              url = re.match(rb"[A-Z]+ [a-z]+://([^/\s]+)", lines[0])
+              if not url:
+                  client.sendall(b"HTTP/1.0 400 Bad request\r\n\r\nfrontier_proxy.py: absolute URLs only\r\n")
+                  return
+              out = [lines[0], b"Host: " + url.group(1)]
+              out += [line for line in lines[1:] if line.split(b":", 1)[0].strip().lower() not in DROP]
+              out.append(b"Connection: close")
+              with socket.create_connection(UPSTREAM, timeout=300) as upstream:
+                  upstream.sendall(b"\r\n".join(out) + b"\r\n\r\n" + body)
+                  while True:
+                      chunk = upstream.recv(65536)
+                      if not chunk:
+                          break
+                      client.sendall(chunk)
+              print(lines[0][:120].decode("latin-1"), flush=True)
+
+
+      class Server(socketserver.ThreadingTCPServer):
+          allow_reuse_address = True
+          daemon_threads = True
+
+
+      if __name__ == "__main__":
+          print(f"frontier_proxy: {LISTEN[0]}:{LISTEN[1]} -> {UPSTREAM[0]}:{UPSTREAM[1]}", flush=True)
+          Server(LISTEN, Handler).serve_forever()
+    # The install's own SITECONF (/opt/offline/SITECONF/local), but for Frontier: through the forwarder, never direct.
+    site-local-config.xml: |
+      <site-local-config>
+      <site name="local">
+          <event-data>
+              <catalog url="trivialcatalog_file:/opt/offline/SITECONF/local/PhEDEx/storage.xml?protocol=eos"/>
+              <catalog url="trivialcatalog_file:/opt/offline/SITECONF/local/PhEDEx/storage.xml?protocol=tier0"/>
+          </event-data>
+          <data-access>
+             <catalog volume="CERN_EOS" protocol="XRootD"/>
+          </data-access>
+          <calib-data>
+              <frontier-connect>
+                  <proxy url="http://localhost:3128"/>
+                  <server url="http://cmsfrontier.cern.ch:8000/FrontierProd"/>
+                  <server url="http://cmsfrontier1.cern.ch:8000/FrontierProd"/>
+                  <server url="http://cmsfrontier2.cern.ch:8000/FrontierProd"/>
+                  <server url="http://cmsfrontier3.cern.ch:8000/FrontierProd"/>
+                  <failover toserver="no"/>
+              </frontier-connect>
+              <catalog url=""/>
+          </calib-data>
+      </site>
+      </site-local-config>
+    storage.json: |
+      [
+          {   "site": "local",
+              "volume": "CERN_EOS",
+              "protocols": [
+                  {"protocol": "SRMv2", "access": "global-rw", "prefix": "gsiftp://eoscmsftp.cern.ch/eos/cms"},
+                  {"protocol": "XRootD", "access": "global-rw", "prefix": "root://eoscms.cern.ch//eos/cms"},
+                  {"protocol": "P5xrootd", "access": "global-rw", "prefix": "root://eoscmshlt.cern.ch//eos/cms"},
+                  {"protocol": "WebDAV", "access": "global-rw", "prefix": "davs://eoscms.cern.ch:443/eos/cms"}
+              ],
+              "type": "DISK",
+              "rse": null,
+              "fts": []
+          }
+      ]

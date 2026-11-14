@@ -17,7 +17,8 @@ What `daq-dev` changes, all in [`values.yaml`](values.yaml), on top of the chart
 - **The labels and ServiceAccounts** the cluster's Kyverno policies ask for.
 
 Nothing here names the namespace: any of the tenant's (`ngt-sakura-...`) gets its own instance. This page uses
-`ngt-sakura-airflow-multipod`, which exists already.
+`ngt-sakura-airflow-multipod`, which exists already. An instance that processes real files with real CMSSW takes one
+more file of values: [step 6](#6-real-files-real-cmssw).
 
 > **Status:** deployed on 2026-11-13, in `ngt-sakura-airflow-multipod`.
 > - **The first install failed.** Its five pods landed on a node where NetApp's NFS doesn't mount, and never started.
@@ -122,6 +123,63 @@ and NetApp's classes here delete a volume with its claim.
 **A second instance:** another namespace, then the commands above with `NS` set to it. It gets its own database, data,
 login and host, e.g. `https://ngt-sakura-airflow-demo2.daq-dev.cms.cern.ch`.
 
+## 6. Real files, real CMSSW
+
+[`values-cmssw.yaml`](values-cmssw.yaml), added after [`values-step-pods.yaml`](../multipod-helm/values-step-pods.yaml),
+runs steps 2, 3 and 4's harvest in CMSSW pods ([steps in pods of their own](../README.md#steps-in-pods-of-their-own)):
+
+- **CMSSW from the nodes:** the image is `cmssw/el8`, through Harbor's cache of Docker Hub, and has no release. The release
+  is the nodes' `/opt/offline-el8`, a `hostPath` mounted at `/opt/offline`, where it was installed. Only three nodes were
+  seen with it, and the pods keep to them.
+- **Conditions from Frontier,** through the P5 proxy `cmsproxy.cms:3128`. That proxy answers `400` to Frontier's
+  requests, whose `Host` header has no port. So each pod runs `frontier_proxy.py` on `localhost:3128`, which puts the port
+  back, and its SITECONF points Frontier there.
+- **The library from the data volume:** the scheduler's setup copies it to `/ngt-data/lib`. The pods run it with the
+  release's Python, after `cmsenv`: the image's own is 3.6.
+- **Airflow's user,** so that the pods and the scheduler can write in the same runs' directories.
+- **8 CPUs per pod,** for step 2's 8 threads, with no CPU limit, as `forbid-cpu-limits` asks.
+- **A 20Gi data volume,** for the input files and each run's outputs.
+
+OMS, EOS and the upload stay fake. EOS is a directory the real file is linked into. The scheduler runs the upload with the
+fake `uploadConditions.py`, which records the real payload and sends it nowhere.
+
+> **Status:** not run yet. Test pods ran steps 2, 3 and 4 on this file, on these nodes, through the library but without
+> Airflow, on 2026-11-13. They took 190, 174 and 37 s.
+
+**In a namespace of its own:** a fake scenario there would run the real `cmsRun` on its placeholder files, and fail.
+
+```bash
+export NS=ngt-sakura-airflow-cmssw
+kubectl create namespace $NS
+# Step 1's Secret, in this namespace. Then, with an image that has step pods (3.3.1-5 or later):
+helm install ngt airflow_automation/airflow_containers/multipod-helm -n $NS \
+  -f airflow_automation/airflow_containers/daq-dev-multipod/values.yaml \
+  -f airflow_automation/airflow_containers/multipod-helm/values-step-pods.yaml \
+  -f airflow_automation/airflow_containers/daq-dev-multipod/values-cmssw.yaml \
+  --post-renderer ngt-airflow-patches --wait --timeout 15m
+```
+
+**The input,** 4.2 GB, under the name the scenario gives it. It goes up in parts through the tunnel, and resumes if run
+again:
+
+```bash
+NS=$NS airflow_automation/airflow_containers/daq-dev-multipod/upload_input.sh \
+  ../example-data/EcalHcal_RAW_Express-v1_403634_1.root 370f0750-b4e9-4d43-a0f5-920069a891e0.root
+```
+
+It lands in `/ngt-data/inputs/`, outside `$NGT_DEV_HOME`, so the demo's resets keep it.
+
+**Play it,** and watch the step pods from a second shell:
+
+```bash
+kubectl -n $NS exec deploy/ngt-airflow-tools -- \
+  airflow_demo.sh play scenario-player/scenarios/real-cmssw/ecal_pedestals_403634.yaml
+kubectl -n $NS get pods -l app=ngt-airflow-step -w
+```
+
+Expect about 10 minutes, a real payload of about 2.3 MB in the ledger, and `expectations: PASSED`. Step pods that succeed
+are deleted. The policy report adds `disallow-host-path` and `prevent-bare-pods` warnings on the step pods.
+
 ## If something goes wrong
 
 | What you see | Likely cause | What to do |
@@ -134,6 +192,12 @@ login and host, e.g. `https://ngt-sakura-airflow-demo2.daq-dev.cms.cern.ch`.
 | `helm repo add` or `dependency build` times out | The machine has no internet: Airflow's chart comes from airflow.apache.org | Run Helm where there is, still through the tunnel |
 | Two instances, one UI | Two namespaces can't share a host, and here they never do | `kubectl get ingress -A` |
 | Anything about the tunnel, kubeconfig, Harbor or the CA | As for the one-pod | [Its table](../daq-dev/README.md#if-something-goes-wrong) |
+| A step task fails at once: `Frontier isn't reachable through frontier_proxy.py` | The P5 proxy refused, or isn't reachable from that node | The forwarder's own log follows in the task's log. If it persists, ask the sysadmins about `cmsproxy.cms` |
+| A step pod stays `Pending`: `didn't match Pod's node affinity` or `Insufficient cpu` | The three nodes with the el8 install are busy, or their names changed | `kubectl -n $NS describe pod -l app=ngt-airflow-step`; the node list is in `values-cmssw.yaml` |
+| A step pod's events: `hostPath type check failed: /opt/offline-el8` | That node has no el8 install | Take it out of `values-cmssw.yaml`'s list |
+| A step task fails with `JobScriptFailedError` | `cmsRun` failed | Its log is in the run's directory: `kubectl -n $NS exec deploy/ngt-airflow-tools -- sh -c 'tail -50 $NGT_DEV_HOME/data/*/run*/*.log'` |
+| The upload refuses an empty payload | The harvester saw too few channels: one file fills 16.5% of EB's | The scenario lowers `threshChannelsAnalyzed` to 0.1. A smaller input needs it lower |
+| A fake scenario fails in step 2 | Real `cmsRun` on its placeholder files | Play fake scenarios in an instance without `values-cmssw.yaml` |
 
 If NetApp's NFS stops working out, the shared volumes can be Longhorn's too. Its volumes are `ReadWriteOnce`, so the five
 pods would then all have to run on one node, kept together by a pod affinity. That's still persistent, but they no

@@ -363,6 +363,7 @@ kubectl get pods -l app=ngt-airflow-step -w    # while a scenario plays
   another image and the script that sets it up, such as a CMSSW one for real processing. Such an image can have its own
   user (`stepPods.securityContext`) and files beside the script (`stepPods.files`, at `/opt/ngt-step-files`). It finds
   the library on the data volume, at `/ngt-data/lib`, where the scheduler's setup copies Airflow's image's at each start.
+  [daq-dev's](daq-dev-multipod/README.md#6-real-files-real-cmssw) is an example.
 - **The scheduler gets what starting them takes:** a Role in the namespace (pods, their logs, events), and an API
   token, which the post-renderer projects in. Without this file it has neither.
 - **A failed pod is kept, to look at,** with `kubectl logs <pod>`. Its task in the UI shows the same output.
