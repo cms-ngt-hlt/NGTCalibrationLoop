@@ -22,7 +22,8 @@ from typing import Optional
 TARGETS = ("oms", "cmsrun", "upload_conditions")
 MODES = {
     "oms": ("connection_error", "timeout", "http_error", "malformed_json"),
-    "cmsrun": ("exit_code",),
+    # no_payload: a harvest succeeds but leaves an empty payload, as a real harvester with too few entries does.
+    "cmsrun": ("exit_code", "no_payload"),
     "upload_conditions": ("exit_code",),
 }
 STEPS = ("step2", "step3", "step4")
@@ -64,9 +65,11 @@ def parse_fault_spec(raw: dict) -> FaultSpec:
     """Validate one `faults:` entry into a FaultSpec, raising FaultSpecError naming the
     offending field. A field set to None counts as unset; a scenario's `at` is the caller's to pop."""
     fields = {key: value for key, value in raw.items() if value is not None}
+    if fields.get("mode") == "no_payload":
+        fields.setdefault("step", "step4")  # only a harvest has a payload
     _validate_fields(fields)
 
-    if fields["target"] != "oms":
+    if fields["mode"] == "exit_code":
         fields.setdefault("exit_code", 1)
     if fields.get("times") == "unlimited":
         fields["times"] = None
@@ -108,6 +111,10 @@ def _validate_fields(fields: dict):
         step = fields["step"]
         _require(step in STEPS,
                  f"faults: 'step' must be one of {STEPS}, got {step!r}")
+
+    if mode == "no_payload":
+        _require("exit_code" not in fields, "faults: no_payload exits 0: it takes no 'exit_code'")
+        _require(fields.get("step") == "step4", "faults: no_payload is a harvest's: 'step' must be step4")
 
 
 def fault_spec_to_entry(spec: FaultSpec) -> dict:

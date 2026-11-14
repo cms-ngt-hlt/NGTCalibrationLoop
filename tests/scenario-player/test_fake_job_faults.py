@@ -52,6 +52,30 @@ def test_a_fault_armed_for_the_job_fires_once(tmp_path, fake, target):
     assert left == []
 
 
+def test_a_harvest_armed_with_no_payload_succeeds_with_an_empty_one(tmp_path):
+    faults_dir = tmp_path / "faults"
+    faults_dir.mkdir()
+    (faults_dir / "cmsrun.json").write_text(
+        json.dumps([{"mode": "no_payload", "step": "step4", "times_remaining": 1}]), encoding="utf-8"
+    )
+    job_dir = tmp_path / "data" / "EcalPedestals" / "run398600" / "harvestJob000"
+    job_dir.mkdir(parents=True)
+    (job_dir / "s4.py").write_text("# FAKE_OUTPUTS=promptCalibConditions.db\n# FAKE_INPUTS=a.root\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, str(BIN / "cmsRun"), "s4.py"],
+        cwd=str(job_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=dict(os.environ, NGT_FAULTS_DIR=str(faults_dir)),
+    )
+
+    assert result.returncode == 0
+    assert "injected cmsrun fault: mode=no_payload step=step4" in result.stdout
+    assert (job_dir / "promptCalibConditions.db").read_bytes() == b""
+
+
 def test_a_fault_scoped_to_another_step_is_left_armed(tmp_path):
     result, left = _run_fake(tmp_path, "cmsRun", "cmsrun", {"step": "step2"})
 

@@ -321,7 +321,7 @@ def main():
         "arm-fault", help="Arm a simulated OMS/cmsRun/upload_conditions.py failure (see faults.py)"
     )
     p_fault.add_argument("--target", required=True, choices=ngt_faults.TARGETS)
-    p_fault.add_argument("--mode", required=True, help="e.g. connection_error/timeout/http_error/malformed_json (oms) or exit_code (cmsrun/upload_conditions)")
+    p_fault.add_argument("--mode", required=True, help="e.g. connection_error/timeout/http_error/malformed_json (oms), exit_code (cmsrun/upload_conditions) or no_payload (cmsrun, step4)")
     p_fault.add_argument("--status", type=int, help="HTTP status >= 400, required for --mode http_error")
     p_fault.add_argument("--exit-code", type=int, dest="exit_code", help="nonzero exit code, cmsrun/upload_conditions (default: 1)")
     p_fault.add_argument("--calibration", choices=CALIBRATIONS, help="optional scope, cmsrun/upload_conditions")

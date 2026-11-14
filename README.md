@@ -426,7 +426,9 @@ This calls `seed.py`'s functions directly, nothing more -- the same engine-agnos
 
 OMS (`connection_error`, `timeout`, `http_error` with a status, `malformed_json`), `cmsRun` and
 `uploadConditions.py` (`exit_code`) can be made to fail on purpose; each prints a one-line
-`(FAKE) injected <target> fault: ...` message. The vocabulary is `scenario-player/faults.py`. pytest arms a fault
+`(FAKE) injected <target> fault: ...` message. A harvest's `cmsRun` can also succeed with an empty payload
+(`no_payload`, step 4 only), as a real harvester with too few entries does; the harvest then has nothing to
+upload, which `expect: payloads: []` checks. The vocabulary is `scenario-player/faults.py`. pytest arms a fault
 in-process with the `inject_fault` fixture (an OMS one through `tests/stubs/omsapi`'s `set_failure()`); a live run
 arms faults by writing `$NGT_DEV_HOME/faults/<target>.json`, which the fakes consume -- from a scenario's top-level
 `faults:` list (see `scenario-player/scenarios/fault_injection_demo.yaml`, or

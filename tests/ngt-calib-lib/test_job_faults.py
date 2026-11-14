@@ -107,6 +107,20 @@ def test_inject_fault_cmsrun_scoped_by_calibration_and_step(inject_fault):
         shell.run_job_script("cmsDriver_abc.sh", "/data/EcalPedestals/run398600")
 
 
+def test_inject_fault_no_payload_is_a_harvest_without_a_payload(inject_fault):
+    """The same fault a scenario arms for the fake cmsRun: here, HARVESTING.sh's exit code for an empty payload."""
+    from ngt_calibration_loop import step4
+
+    inject_fault({"target": "cmsrun", "mode": "no_payload", "calibration": "EcalPedestals"})
+    job = step4.JobSpec(
+        job_dir="/data/EcalPedestals/run1/harvestJob_abc", script_name="HARVESTING.sh", final_db_name="x.db",
+        metadata_filename="x.txt", input_files=set(),
+    )
+
+    with pytest.raises(step4.NoPayload):
+        step4.run_harvesting_job(job)
+
+
 def test_inject_fault_upload_conditions_scoped_by_calibration(inject_fault):
     inject_fault({"target": "upload_conditions", "mode": "exit_code", "exit_code": 1, "calibration": "BeamSpot"})
 

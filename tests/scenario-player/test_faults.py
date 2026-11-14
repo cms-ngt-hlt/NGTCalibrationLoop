@@ -12,6 +12,9 @@ CMSRUN = {"target": "cmsrun", "mode": "exit_code"}
 def test_defaults():
     assert faults.parse_fault_spec(OMS) == faults.FaultSpec(target="oms", mode="timeout", times=1)
     assert faults.parse_fault_spec(CMSRUN).exit_code == 1
+    # A harvest that succeeds without a payload: no exit code, and only a harvest has one.
+    no_payload = faults.parse_fault_spec({"target": "cmsrun", "mode": "no_payload"})
+    assert (no_payload.exit_code, no_payload.step) == (None, "step4")
 
 
 @pytest.mark.parametrize(
@@ -40,6 +43,9 @@ def test_accepts(raw, field, value):
         *[({"target": "oms", "mode": "http_error", "status": s}, "status") for s in (None, 399, "503")],
         ({**CMSRUN, "exit_code": 0}, "exit_code"),
         ({**CMSRUN, "step": "step5"}, "step"),
+        ({"target": "cmsrun", "mode": "no_payload", "step": "step2"}, "step4"),
+        ({"target": "cmsrun", "mode": "no_payload", "exit_code": 3}, "no 'exit_code'"),
+        ({"target": "upload_conditions", "mode": "no_payload"}, "mode"),
         # fields the target's consumer never looks at, so the fault could not fire as written
         ({**OMS, "calibration": "EcalPedestals"}, "takes only"),
         ({"target": "upload_conditions", "mode": "exit_code", "step": "step4"}, "takes only"),

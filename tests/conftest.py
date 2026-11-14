@@ -252,7 +252,11 @@ def inject_fault(job_runner):
         if spec.target == "oms":
             omsapi.set_failure(spec.mode, status=spec.status, times=spec.times, run=spec.run)
         else:
-            job_runner.queue_failure(returncode=spec.exit_code, match=_job_fault_matcher(spec), times=spec.times)
+            # no_payload: HARVESTING.sh's own exit code for an empty payload, which the job runner reports.
+            from ngt_calibration_loop import step4  # pylint: disable=import-outside-toplevel
+
+            returncode = step4.NO_PAYLOAD_EXIT_CODE if spec.mode == "no_payload" else spec.exit_code
+            job_runner.queue_failure(returncode=returncode, match=_job_fault_matcher(spec), times=spec.times)
 
     return _inject
 
