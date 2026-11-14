@@ -327,7 +327,7 @@ fi
 mv promptCalibConditions.db {final_db_name}
         if [ -f "{metadata_file}" ]; then echo "Metadata file exists!"; \
 else echo "Metadata file missing"; fi
-uploadConditions.py {final_db_name}
+{self.uploadCommand} {final_db_name}
 
 """
             )
@@ -446,6 +446,9 @@ uploadConditions.py {final_db_name}
         self.scramArch = config["SCRAM_ARCH"]
         self.cmsswVersion = config["CMSSW_VERSION"]
         self.globalTag = config["GLOBAL_TAG"]
+        # Whichever PATH finds, unless a test setup gives its stand-in's absolute path: HARVESTING.sh's cmsenv puts
+        # a real release's own uploader first.
+        self.uploadCommand = config.get("UPLOAD_COMMAND", "uploadConditions.py")
         self.dataBasePath = config.get("DATA_BASE_PATH", "/data/ngt")
         self.pathWhereFilesAppear = os.path.join(self.dataBasePath, self.calibration_name) + "/"
         self.condAuthPath = os.path.expanduser(config.get("COND_AUTH_PATH", "/nfshome0/sakura"))
@@ -488,6 +491,7 @@ uploadConditions.py {final_db_name}
         self.scramArch = ""
         self.cmsswVersion = ""
         self.globalTag = ""
+        self.uploadCommand = ""
         self.setOfFilesObserved = set()
         self.setOfFilesToProcess = set()
         self.setOfInputFiles = set()

@@ -221,6 +221,24 @@ def test_harvesting_uploads_only_a_payload_its_cmsrun_wrote(loop, tmp_path, monk
     assert (job_dir / "uploaded.txt").exists() == uploaded
 
 
+def test_harvesting_uploads_with_the_command_the_parameters_name(isolated_env):
+    """A test setup names its stand-in by absolute path: after HARVESTING.sh's cmsenv, PATH finds a real release's."""
+    params = json.loads(isolated_env.parameters_path.read_text(encoding="utf-8"))
+    params["UPLOAD_COMMAND"] = "/opt/ngt/scenario-player/bin/uploadConditions.py"
+    isolated_env.parameters_path.write_text(json.dumps(params), encoding="utf-8")
+    loop = NGTLoopStep4.NGTLoopStep4("Step4Test", CALIBRATION)
+    run_dir = _run_dir(loop, 398600)
+    run_dir.mkdir(parents=True)
+    loop.TryLookForRun()
+    _seed_step3_job_output(run_dir, "alcaPromptJob000")
+    loop.TryProcessFiles()
+    loop.ContinueAfterCheckFiles()
+    loop.TryPrepareHarvestingJobs()
+
+    script = (Path(loop.jobDir) / "HARVESTING.sh").read_text(encoding="utf-8")
+    assert "\n/opt/ngt/scenario-player/bin/uploadConditions.py NGTCalibEcalPedestals.db\n" in script
+
+
 def test_prepare_and_launch_harvesting_job_writes_metadata_and_script(loop, popen_calls):
     run_dir = _run_dir(loop, 398600)
     run_dir.mkdir(parents=True)

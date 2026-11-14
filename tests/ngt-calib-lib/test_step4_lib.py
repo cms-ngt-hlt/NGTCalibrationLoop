@@ -282,6 +282,23 @@ def test_the_harvest_fails_without_its_release_area_instead_of_running_elsewhere
     assert not list(elsewhere.iterdir())
 
 
+def test_the_upload_runs_the_command_the_parameters_name(isolated_env, job_runner):
+    """A test setup names its stand-in by absolute path: after a real cmsenv, PATH finds the release's own."""
+    params = json.loads(isolated_env.parameters_path.read_text(encoding="utf-8"))
+    params["UPLOAD_COMMAND"] = "/opt/ngt/scenario-player/bin/uploadConditions.py"
+    isolated_env.parameters_path.write_text(json.dumps(params), encoding="utf-8")
+    run_dir = _run_dir(isolated_env, 398600)
+    run_dir.mkdir(parents=True)
+    ctx = step4.build_run_context(CALIBRATION, "398600")
+    _seed_step3_job_output(run_dir, "alcaPromptJob000")
+    job_spec = step4.prepare_harvesting_job(ctx, step4.check_files_for_processing(ctx).files_to_process)
+
+    step4.upload_conditions(job_spec)
+
+    upload_script = (job_spec.job_dir / "UPLOAD.sh").read_text(encoding="utf-8")
+    assert "\n/opt/ngt/scenario-player/bin/uploadConditions.py NGTCalibEcalPedestals.db\n" in upload_script
+
+
 def test_upload_retries_independently_of_harvesting(isolated_env, job_runner):
     """The core Step 4 fix: a failed condDB upload can be retried on its own
     without re-running ALCAHARVEST."""

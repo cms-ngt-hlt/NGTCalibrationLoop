@@ -44,6 +44,9 @@ RUN_START_LOG_NAME = "runStart.log"
 # HARVESTING.sh's exit code when cmsRun succeeded but the harvester wrote an empty payload: it had too few entries
 # for its thresholds (ECAL's pedestals from one file of run 403634: 16.5% of EB's channels, below its 30%).
 NO_PAYLOAD_EXIT_CODE = 3
+# ngtParameters.jsn's UPLOAD_COMMAND, by default whichever uploadConditions.py PATH finds. A test setup gives its
+# stand-in's absolute path: where CMSSW is real, a cmsenv puts the release's own first on PATH.
+DEFAULT_UPLOAD_COMMAND = "uploadConditions.py"
 
 
 class NoPayload(Exception):
@@ -78,6 +81,7 @@ class JobSpec:
     metadata_filename: str
     input_files: set
     lumisections: Optional[frozenset] = None  # what input_files hold, from their lineage; None if unknown
+    upload_command: str = DEFAULT_UPLOAD_COMMAND
 
 
 def _path_where_files_appear(ngt_params, calibration_name):
@@ -251,6 +255,7 @@ if [ -f "{metadata_filename}" ]; then echo "Metadata file exists!"; else echo "M
         metadata_filename=metadata_filename,
         input_files=input_files,
         lumisections=None if lumisections is None else frozenset(lumisections),
+        upload_command=ngt_params.get("UPLOAD_COMMAND", DEFAULT_UPLOAD_COMMAND),
     )
 
 
@@ -282,7 +287,7 @@ def upload_conditions(job_spec: JobSpec):
     upload_script.write_text(
         f"""#!/bin/bash -ex
 
-uploadConditions.py {job_spec.final_db_name}
+{job_spec.upload_command} {job_spec.final_db_name}
 """,
         encoding="utf-8",
     )

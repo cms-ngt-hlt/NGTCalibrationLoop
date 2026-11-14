@@ -196,13 +196,19 @@ Step 4 loop takes all available ALCARECO files available at a given time that we
 The three loops don't need CMSSW, EOS, OMS, or a real conditions DB to exercise their
 state-machine logic. `/data/ngt`, `/tmp/ngt`, and `/nfshome0/sakura` are configurable
 via `DATA_BASE_PATH`, `LOG_BASE_PATH`, and `COND_AUTH_PATH` in `ngtParameters.jsn`
-(they default to those same production paths, so deployment behavior is unchanged; the library,
-`ngt_calibration_loop/`, also takes `INPUT_URL_PREFIX`, by default `root://eoscms.cern.ch/`, and
-`CMSSW_AREA`, the directory of one release area every step's jobs `cmsenv` in, made beforehand:
-without it, each step 2 job makes one in its run's directory),
+(they default to those same production paths, so deployment behavior is unchanged),
 and each script now guards its argument parsing / main loop behind
 `if __name__ == "__main__":`, so `NGTLoopStep2/3/4.py` can be imported without
 launching anything.
+
+Three more keys, none of them in the production file:
+- `UPLOAD_COMMAND`: the uploader step 4 runs, by default `uploadConditions.py` from `PATH`. The
+  scenario player gives its fake's absolute path: after a real release's `cmsenv`, `PATH` finds the
+  release's own first.
+- `INPUT_URL_PREFIX`, for the library (`ngt_calibration_loop/`): what goes before an input file's
+  path, by default `root://eoscms.cern.ch/`.
+- `CMSSW_AREA`, for the library: the directory of the one release area every step's jobs `cmsenv`
+  in, made beforehand. Without it, each step 2 job makes one in its run's directory.
 
 To set up a local environment and run the test suite:
 ```bash
