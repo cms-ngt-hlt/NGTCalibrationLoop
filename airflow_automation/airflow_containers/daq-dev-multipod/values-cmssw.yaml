@@ -15,6 +15,8 @@ sharedVolumes:
 stepPods:
   # CMS's el8 image, through Harbor's cache of Docker Hub. It has no release: the nodes do.
   image: harbor.cms/it-registry-proxy/docker.io/cmssw/el8:x86_64-grid@sha256:d5e4f67f75efd8cb61e509dc519eca8a4c6d1b41c5d933c46dcdfde943690a4d
+  # So the scenario player refuses scenarios made for the fakes here: real cmsRun fails on their placeholder files.
+  realDependencies: [cmssw]
   # Airflow's user, whose files these pods share: the scheduler writes in the runs' directories too. Its name, for
   # the tools that ask, as the image has no entry for it.
   securityContext:
@@ -74,10 +76,11 @@ stepPods:
     param() { sed -n "s/.*\"$1\" *: *\"\([^\"]*\)\".*/\1/p" "$NGT_DEV_HOME/ngtParameters.jsn"; }
     export SCRAM_ARCH=$(param SCRAM_ARCH)
     release=$(param CMSSW_VERSION)
-    # The instance's release area, which step 4's job cmsenvs in, made by the first pod that needs it: the scenario
-    # player's setup leaves only a placeholder there. It gives this shell the release's Python (3.9, with PyYAML),
-    # which the library needs.
-    area="$NGT_DEV_HOME/cmssw_home"
+    # The instance's release area, CMSSW_AREA, which every step's jobs cmsenv in, made by the first pod that needs
+    # it: the scenario player's setup leaves only a placeholder there. It gives this shell the release's Python (3.9,
+    # with PyYAML), which the library needs.
+    area=$(param CMSSW_AREA)
+    area=${area:-$NGT_DEV_HOME/cmssw_home}
     (
       command -v flock > /dev/null && flock 9
       if [ ! -d "$area/$release/.SCRAM" ]; then

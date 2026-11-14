@@ -146,6 +146,8 @@ def test_cmssw_step_pods_pass_the_clusters_checks_with_the_release_from_the_node
     assert pod["spec"]["securityContext"]["runAsUser"] == 50000
     claims = {(d["metadata"]["name"], d["spec"]["resources"]["requests"]["storage"]) for d in docs if d["kind"] == "PersistentVolumeClaim"}
     assert ("ngt-airflow-data", "20Gi") in claims, "room for the inputs and the runs' outputs"
+    tools = by_name[("Deployment", "ngt-airflow-tools")]["spec"]["template"]["spec"]["containers"][0]
+    assert {"name": "NGT_REAL_DEPENDENCIES", "value": "cmssw"} in tools["env"], "fake scenarios refused here"
     # The el8 install was made under /opt/offline, and only works mounted there.
     (offline,) = [v for v in pod["spec"]["volumes"] if "hostPath" in v]
     assert offline["hostPath"]["path"] == "/opt/offline-el8"

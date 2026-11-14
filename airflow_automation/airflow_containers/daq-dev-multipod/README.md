@@ -146,7 +146,8 @@ fake `uploadConditions.py`, which records the real payload and sends it nowhere.
 > **Status:** not run yet. Test pods ran steps 2, 3 and 4 on this file, on these nodes, through the library but without
 > Airflow, on 2026-11-13. They took 190, 174 and 37 s.
 
-**In a namespace of its own:** a fake scenario there would run the real `cmsRun` on its placeholder files, and fail.
+**In a namespace of its own:** the scenarios for the fakes can't play there. Real `cmsRun` would fail on their
+placeholder files, so the player refuses them.
 
 ```bash
 export NS=ngt-sakura-airflow-cmssw
@@ -197,7 +198,7 @@ are deleted. The policy report adds `disallow-host-path` and `prevent-bare-pods`
 | A step pod's events: `hostPath type check failed: /opt/offline-el8` | That node has no el8 install | Take it out of `values-cmssw.yaml`'s list |
 | A step task fails with `JobScriptFailedError` | `cmsRun` failed | Its log is in the run's directory: `kubectl -n $NS exec deploy/ngt-airflow-tools -- sh -c 'tail -50 $NGT_DEV_HOME/data/*/run*/*.log'` |
 | The upload refuses an empty payload | The harvester saw too few channels: one file fills 16.5% of EB's | The scenario lowers `threshChannelsAnalyzed` to 0.1. A smaller input needs it lower |
-| A fake scenario fails in step 2 | Real `cmsRun` on its placeholder files | Play fake scenarios in an instance without `values-cmssw.yaml` |
+| `play` exits 2: `can't play here: it needs cmssw fake, and this deployment's is real` | A scenario for the fakes: real `cmsRun` would fail on its placeholder files | Play it in an instance without `values-cmssw.yaml` |
 
 If NetApp's NFS stops working out, the shared volumes can be Longhorn's too. Its volumes are `ReadWriteOnce`, so the five
 pods would then all have to run on one node, kept together by a pod affinity. That's still persistent, but they no
