@@ -594,7 +594,7 @@ cmsDriver.py expressStep2 --conditions {self.globalTag} \\
             f.write(
                 f"""--scenario {step_args["scenario"]} \\
 --era {step_args["era"]} \\
---nThreads 8 --nStreams 8 -n -1 \\
+--nThreads 8 --nStreams 8 -n {step_args.get("max_events", -1)} \\
 --filein {str_paths} --fileout file:{tempOutputFileName} --no_exec \\
 --python_filename {python_filename}
 

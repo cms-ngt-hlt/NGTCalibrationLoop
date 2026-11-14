@@ -12,6 +12,7 @@ from pathlib import Path
 import omsapi
 import pytest
 import requests
+import yaml
 from support.fake_subprocess import FakeEOS, make_fake_run
 
 import NGTLoopStep2
@@ -302,6 +303,23 @@ def test_input_files_are_read_through_the_configured_prefix(isolated_env, monkey
     script = (Path(loop.workingDir) / loop.tempScriptName).read_text(encoding="utf-8")
     assert f"--filein file:{raw} " in script and "root://" not in script
     assert "run398600_LS0051To0051_ecalPedsStep2.root" in script  # edmFileUtil read it through file:
+
+
+def test_express_jobs_run_every_event_unless_the_config_says_how_many(isolated_env, fake_eos):
+    """step_2_config.max_events, for a short test, as the library's step 2 takes it."""
+    path = isolated_env.calib_yaml_dir / f"{CALIBRATION}.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["step_2_config"]["max_events"] = 500
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    loop = NGTLoopStep2.NGTLoopStep2("Step2Test", CALIBRATION)
+    _latch_live_run(loop, 398600)
+    fake_eos.add_file(f"{loop.pathWhereFilesAppear}/run398600_ls0051.root", run_number=398600, ls_numbers=[51])
+
+    loop.TryProcessLS()
+    loop.ContinueAfterCheckLS()
+    loop.TryPrepareExpressJobs()
+
+    assert " -n 500 " in (Path(loop.workingDir) / loop.tempScriptName).read_text(encoding="utf-8")
 
 
 def test_max_files_per_job_batches_one_at_a_time(loop, fake_eos):

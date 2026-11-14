@@ -332,6 +332,20 @@ def test_input_files_are_read_through_the_configured_prefix(isolated_env, monkey
     assert job_spec.output_file == "run398600_LS0051To0051_ecalPedsStep2.root"  # edmFileUtil read it through file:
 
 
+def test_step2_runs_every_event_unless_its_config_says_how_many(isolated_env, fake_eos):
+    """step_2_config.max_events, for a short test: a scenario's calibration_config can set it."""
+    ctx = _latch_live_run(398600)
+    fake_eos.add_file(f"{ctx.path_where_files_appear}/run398600_ls0051.root", run_number=398600, ls_numbers=[51])
+    files = step2.check_ls_for_processing(ctx).ls_to_process
+    script = (Path(ctx.working_dir) / step2.prepare_express_job(ctx, files).script_name).read_text(encoding="utf-8")
+    assert " -n -1 " in script
+
+    _patch_calib_yaml(isolated_env, CALIBRATION, max_events=500)
+    ctx = step2.build_run_context(CALIBRATION, 398600)
+    script = (Path(ctx.working_dir) / step2.prepare_express_job(ctx, files).script_name).read_text(encoding="utf-8")
+    assert " -n 500 " in script
+
+
 def test_max_files_per_job_batches_one_at_a_time(isolated_env, fake_eos):
     """MAXIMUM_LS_PER_JOB is 1: with two new LS files available, only the
     lexicographically-first is included in a single express job; the other is
