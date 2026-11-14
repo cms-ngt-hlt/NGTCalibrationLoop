@@ -152,7 +152,7 @@ placeholder files, so the player refuses them.
 ```bash
 export NS=ngt-sakura-airflow-cmssw
 kubectl create namespace $NS
-# Step 1's Secret, in this namespace. Then, with an image that has step pods (3.3.1-5 or later):
+# Step 1's Secret, in this namespace. values.yaml's image, 3.3.1-5, is the first with step pods. Then:
 helm install ngt airflow_automation/airflow_containers/multipod-helm -n $NS \
   -f airflow_automation/airflow_containers/daq-dev-multipod/values.yaml \
   -f airflow_automation/airflow_containers/multipod-helm/values-step-pods.yaml \
