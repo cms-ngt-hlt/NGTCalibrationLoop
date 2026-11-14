@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import config, eos, oms, shell
+from . import config, eos, lineage, oms, shell
 
 MINIMUM_LS_PER_BATCH = 1
 MAXIMUM_LS_PER_JOB = 1
@@ -73,6 +73,7 @@ class JobSpec:
     output_file: str
     witness_file: str
     ls_batch: set
+    lumisections: frozenset = frozenset()  # what edmFileUtil reported for ls_batch: the output's lineage
 
 
 def find_new_run(calibration_name):
@@ -275,14 +276,17 @@ rm {temp_script_name}
         output_file=output_filename,
         witness_file=witness_file,
         ls_batch=express_ls,
+        lumisections=frozenset(ls_numbers),
     )
 
 
 def run_express_job(job_spec: JobSpec):
-    """Run the prepared express job script to completion (blocking). Raises
-    shell.JobScriptFailedError on failure, which is what lets the Airflow task
-    calling this retry per its own retry policy."""
-    return shell.run_job_script(job_spec.script_name, job_spec.working_dir)
+    """Run the prepared express job script to completion (blocking), then record
+    its output's lineage. Raises shell.JobScriptFailedError on failure, which is
+    what lets the Airflow task calling this retry per its own retry policy."""
+    result = shell.run_job_script(job_spec.script_name, job_spec.working_dir)
+    lineage.write(Path(job_spec.working_dir) / job_spec.output_file, job_spec.lumisections, job_spec.ls_batch)
+    return result
 
 
 def finalize_cycle(ctx: RunContext, job_spec: Optional[JobSpec], decision: CycleDecision):

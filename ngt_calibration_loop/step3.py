@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import config, shell
+from . import config, lineage, shell
 
 # same as NGTLoopStep3.py's (8 hours, like Step 4's);
 # overridable per calibration (step_3_config.timeoutSeconds) -- see step2.py's
@@ -56,6 +56,8 @@ class JobSpec:
     script_name: str
     witness_file: str
     input_files: set
+    output_file: Optional[str] = None  # the ALCARECO file Step 4 harvests, in job_dir
+    lumisections: Optional[frozenset] = None  # what input_files hold, from their lineage; None if unknown
 
 
 def _path_where_files_appear(ngt_params, calibration_name):
@@ -120,7 +122,9 @@ def prepare_alca_prompt_job(ctx: RunContext, files_to_process) -> Optional[JobSp
         mods = "\n".join(conf["python_config_mods"])
         python_config_mods = f"cat <<@EOF>> {python_filename}\n{mods}\n@EOF\n"
 
-    rm_express_files = "\n".join(f"  rm {p}" for p in input_files)
+    rm_express_files = "\n".join(f"  rm {p}\n  rm -f {lineage.path_of(p)}" for p in input_files)
+    # Read now: the job deletes its inputs, their lineage with them.
+    lumisections = lineage.lumisections_of(input_files)
 
     ngt_params = ctx.ngt_params
     alca_job_file = job_dir / "ALCAOUTPUT.sh"
@@ -150,15 +154,26 @@ fi
 """
         )
 
-    return JobSpec(job_dir=job_dir, script_name="ALCAOUTPUT.sh", witness_file=witness_file, input_files=input_files)
+    return JobSpec(
+        job_dir=job_dir,
+        script_name="ALCAOUTPUT.sh",
+        witness_file=witness_file,
+        input_files=input_files,
+        output_file=ctx.calib_config.get("step_4_config", {}).get("step_3_root_filename"),
+        lumisections=None if lumisections is None else frozenset(lumisections),
+    )
 
 
 def run_alca_prompt_job(job_spec: JobSpec):
-    """Run the prepared ALCAOUTPUT.sh script to completion (blocking). Raises
+    """Run the prepared ALCAOUTPUT.sh script to completion (blocking), then record
+    its output's lineage, if its inputs' was known. Raises
     shell.JobScriptFailedError on failure so the Airflow task retries."""
-    return shell.run_job_script(
+    result = shell.run_job_script(
         job_spec.script_name, job_spec.job_dir, stdout_log="stdout.log", stderr_log="stderr.log"
     )
+    if job_spec.lumisections is not None and job_spec.output_file:
+        lineage.write(Path(job_spec.job_dir) / job_spec.output_file, job_spec.lumisections, job_spec.input_files)
+    return result
 
 
 def finalize_cycle(ctx: RunContext, job_spec: Optional[JobSpec], decision: CycleDecision):

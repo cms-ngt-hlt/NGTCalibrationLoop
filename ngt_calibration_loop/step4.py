@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import config, shell
+from . import config, lineage, shell
 
 MINIMUM_FILES_PER_BATCH = 1
 # Overridable per calibration (step_4_config.timeoutSeconds) -- see
@@ -77,6 +77,7 @@ class JobSpec:
     final_db_name: str
     metadata_filename: str
     input_files: set
+    lumisections: Optional[frozenset] = None  # what input_files hold, from their lineage; None if unknown
 
 
 def _path_where_files_appear(ngt_params, calibration_name):
@@ -242,21 +243,24 @@ if [ -f "{metadata_filename}" ]; then echo "Metadata file exists!"; else echo "M
 """
         )
 
+    lumisections = lineage.lumisections_of(input_files)
     return JobSpec(
         job_dir=job_dir,
         script_name="HARVESTING.sh",
         final_db_name=final_db_name,
         metadata_filename=metadata_filename,
         input_files=input_files,
+        lumisections=None if lumisections is None else frozenset(lumisections),
     )
 
 
 def run_harvesting_job(job_spec: JobSpec):
-    """Run HARVESTING.sh (ALCAHARVEST only) to completion. Raises NoPayload if the
+    """Run HARVESTING.sh (ALCAHARVEST only) to completion, then record the
+    payload's lineage, if its inputs' was known. Raises NoPayload if the
     harvester wrote an empty payload, and shell.JobScriptFailedError on any other
     failure, so the Airflow task retries."""
     try:
-        return shell.run_job_script(
+        result = shell.run_job_script(
             job_spec.script_name, job_spec.job_dir, stdout_log="stdout.log", stderr_log="stderr.log"
         )
     except shell.JobScriptFailedError as exc:
@@ -265,6 +269,9 @@ def run_harvesting_job(job_spec: JobSpec):
                 f"the harvester in {job_spec.job_dir} wrote an empty payload: too few entries for its thresholds"
             ) from exc
         raise
+    if job_spec.lumisections is not None:
+        lineage.write(Path(job_spec.job_dir) / job_spec.final_db_name, job_spec.lumisections, job_spec.input_files)
+    return result
 
 
 def upload_conditions(job_spec: JobSpec):

@@ -11,7 +11,7 @@ from pathlib import Path
 import omsapi
 import pytest
 
-from ngt_calibration_loop import run_step, step2, step4
+from ngt_calibration_loop import lineage, run_step, step2, step4
 
 CALIBRATION = "EcalPedestals"
 RUN = 398601
@@ -71,6 +71,12 @@ def test_one_file_through_every_step_each_taking_the_previous_ones_result(isolat
     assert scripts[0].startswith("cmsDriver_") and scripts[1:] == ["ALCAOUTPUT.sh", "HARVESTING.sh", "UPLOAD.sh"]
     assert job_runner[1]["cwd"] == result3["step3_job_dir"]
     assert (ctx.working_dir / step2.PROCESSED_LOG_NAME).exists()
+
+    # Each output's lineage, from edmFileUtil's lumisections for the input, through to the payload's.
+    assert lineage.read(result2["step2_output"]) == {"lumisections": [51], "inputs": [str(Path(file_path))]}
+    assert lineage.read(alca_output) == {"lumisections": [51], "inputs": [result2["step2_output"]]}
+    (payload_lineage,) = ctx.working_dir.glob("harvestJob_*/NGTCalibEcalPedestals.db.lineage.json")
+    assert json.loads(payload_lineage.read_text(encoding="utf-8")) == {"lumisections": [51], "inputs": [str(alca_output)]}
 
 
 def test_step2_has_nothing_to_do_for_a_file_already_processed(isolated_env, fake_eos, job_runner):
