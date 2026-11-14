@@ -3,8 +3,8 @@ The daq-dev example in airflow_automation/airflow_containers/daq-dev/, without a
 `kubectl apply -k` creates keeps to the rules the tenant's Capsule Tenant enforces at deploy time
 (registries, namespace prefix, Ingress class and hostnames, the LimitRange), on a cluster few people can
 reach, and that the pod passes the checks its Kyverno policies report, which the cluster only audits
-for now but will enforce on staging and production. The rules are the ones read from the cluster on
-2026-11-06, in the overlay's README.md.
+for now but will enforce on staging and production. The rules are the ones read from the cluster, with
+their dates, in the overlay's README.md.
 """
 
 import re
@@ -20,7 +20,8 @@ OVERLAY = REPO_ROOT / "airflow_automation" / "airflow_containers" / "daq-dev"
 
 ALLOWED_REGISTRIES = ("harbor.cms", "gitlab-registry.cern.ch")
 ALLOWED_HOSTNAMES = re.compile(r".*\.daq-dev\.cms\.cern\.ch$")
-# The tenant's LimitRange, per container, and a default limit of 1Gi for a container that sets none.
+# The tenant's LimitRange, per container, and a default limit of 1Gi for a container that sets none. The CPU maximum
+# is the one it had until November 2026, kept as a bound.
 CONTAINER_MIN = {"cpu": 40, "memory": 40}
 CONTAINER_MAX = {"cpu": 32000, "memory": 64 * 1024}
 

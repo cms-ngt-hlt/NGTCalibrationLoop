@@ -125,8 +125,9 @@ kubectl get policyreport
 The cluster's Kyverno policies only report for now, but will block on staging and production. Expect a warning and a
 failure, both known:
 
-- **`forbid-cpu-limits`**, a warning, on every object that holds the pod's spec. The pod keeps its CPU limits on purpose:
-  the tenant gives a container without one a limit of 1 CPU anyway, which would halve Airflow's.
+- **`forbid-cpu-limits`**, a warning, on every object that holds the pod's spec. The pod keeps its CPU limits from when
+  the tenant gave a container without one a limit of 1 CPU, which would have halved Airflow's. By 2026-11-14 it no
+  longer did, so they could go.
 - **`restrict-emptydir-sizelimit`**, a failure on the Pod: the cluster wants every `emptyDir` under 400Mi, and this pod
   keeps its database (1Gi) and its data (2Gi) on `emptyDir`s. Smaller ones would have to be measured first.
 - **`block-large-images`** can show an error instead of a result, when Kyverno fails to read the image from Harbor, as
@@ -175,6 +176,7 @@ kubectl delete namespace ngt-sakura-airflow    # remove everything, the Secret a
 | `Unauthorized`, after some weeks | The kubeconfig's token expired (30 days) | Download it again, and redo step 1 |
 | 403 on `kubectl get ns` | The `-fqdn` context doesn't list cluster-wide | Use the `daq-dev` context for that |
 | Namespace refused | Its name doesn't start with `ngt-sakura-` | Keep the prefix |
+| `Forbidden` right after `kubectl create namespace` | Capsule gives the tenant's owners their rights in a new namespace a few seconds after it's created | Wait a few seconds, and run the command again |
 | `ImagePullBackOff` on `airflow` | Not pushed, another project or tag, or a private project without step 4's Secret | `kubectl describe pod`; `crane ls` as in step 3 |
 | Warning `FailedToRetrieveImagePullSecret` | There's no `harbor-ngt-sakura` Secret | Nothing, if the project is public |
 | `ImagePullBackOff` on `postgres` | Harbor's cache path changed | `kubectl describe pod`; ask the sysadmins for the path of Docker Hub's `library/postgres` |
@@ -189,9 +191,11 @@ kubectl delete namespace ngt-sakura-airflow    # remove everything, the Secret a
 Besides [what the deployment doesn't do anywhere](../README.md#what-this-deployment-doesnt-do):
 
 - **The rules, as read from the cluster on 2026-11-06.** Registries `harbor.cms` and `gitlab-registry.cern.ch`; IngressClass
-  `traefik`, hostnames matching `.*\.daq-dev\.cms\.cern\.ch`; per container, a default of 100m CPU and 512Mi requested,
-  1 CPU and 1Gi as limits, and at most 32 CPU and 64Gi; for the whole tenant, 48 CPU, 128Gi and 30 namespaces. No
+  `traefik`, hostnames matching `.*\.daq-dev\.cms\.cern\.ch`; for the whole tenant, 48 CPU, 128Gi and 30 namespaces. No
   NetworkPolicy and no Pod Security level are set on the tenant's namespace.
+- **Per container, as read again on 2026-11-14:** unless it says otherwise, 100m CPU and 512Mi requested, and a 1Gi
+  memory limit. At least 40m CPU and 40Mi, at most 64Gi. There's no default CPU limit and no CPU maximum any more: on
+  2026-11-06, there were 1 CPU and 32.
 - **Every member of the owner group administers everything in the tenant**, this namespace included, and can read its
   Secrets.
 - **Nodes get drained for maintenance**, and each time this demo comes back empty.

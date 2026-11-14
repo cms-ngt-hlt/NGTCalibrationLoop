@@ -143,8 +143,17 @@ runs steps 2, 3 and 4's harvest in CMSSW pods ([steps in pods of their own](../R
 OMS, EOS and the upload stay fake. EOS is a directory the real file is linked into. The scheduler runs the upload with the
 fake `uploadConditions.py`, which records the real payload and sends it nowhere.
 
-> **Status:** not run yet. Test pods ran steps 2, 3 and 4 on this file, on these nodes, through the library but without
-> Airflow, on 2026-11-13. They took 190, 174 and 37 s.
+> **Status:** played on 2026-11-15, in `ngt-sakura-airflow-cmssw`, installed the day before: `expectations: PASSED`.
+> - **The run:** steps 2, 3 and 4's harvest took 217, 197 and 49 s in their pods, each at its first try, all on one of
+>   the three nodes. The upload recorded a real payload of 2,338,816 bytes: tag `EcalPedestals_NGTDemonstrator`, one
+>   IOV since 403634. From the run's start to `PASSED`, 9 minutes.
+> - **The install:** the six pods came up with no restarts, Postgres on a worker and the other five on one `rubu` node.
+>   They had none after the play either.
+> - **The policy report:** one failure that step 3 doesn't list, the scheduler's API token. The step pods have three of
+>   their own while they exist. Both below.
+>
+> Before that, on 2026-11-13, test pods ran steps 2, 3 and 4 on this file, on these nodes, through the library but
+> without Airflow. They took 190, 174 and 37 s.
 
 **In a namespace of its own:** the scenarios for the fakes can't play there. Real `cmsRun` would fail on their
 placeholder files, so the player refuses them.
@@ -160,8 +169,8 @@ helm install ngt airflow_automation/airflow_containers/multipod-helm -n $NS \
   --post-renderer ngt-airflow-patches --wait --timeout 15m
 ```
 
-**The input,** 4.2 GB, under the name the scenario gives it. It goes up in parts through the tunnel, and resumes if run
-again:
+**The input,** 4.2 GB, under the name the scenario gives it. It goes up in parts through the tunnel, which took 90
+minutes on 2026-11-14, and resumes if run again:
 
 ```bash
 NS=$NS airflow_automation/airflow_containers/daq-dev-multipod/upload_input.sh \
@@ -179,7 +188,19 @@ kubectl -n $NS get pods -l app=ngt-airflow-step -w
 ```
 
 Expect about 10 minutes, a real payload of about 2.3 MB in the ledger, and `expectations: PASSED`. Step pods that succeed
-are deleted. The policy report adds `disallow-host-path` and `prevent-bare-pods` warnings on the step pods.
+are deleted.
+
+**The step pods' policies:** while each exists, Kyverno fails three policies on it. `disallow-host-path` and
+`limit-hostpath-vols` are for the release's `hostPath`, and `prevent-bare-pods` is because KubernetesPodOperator starts
+pods without a controller. They're in `kubectl get events` and at the start of each step's task log. Once a pod is gone,
+they're no longer in the policy report.
+
+**The scheduler's API token:** from the install on, the policy report has a failure that step 3 doesn't list,
+`restrict-serviceaccounttoken-projected-volumes` on the scheduler. That's the API token it starts the step pods with,
+which the post-renderer projects in. The cluster's policies want no pod to talk to the API: a token mounted the usual
+way, `automountServiceAccountToken: true`, fails `restrict-automount-sa-token` instead. A token kept in a Secret would
+pass both, but it never expires. Both only report here, but will block on staging and production: there, step pods would
+need an exception for the scheduler from the sysadmins.
 
 ## If something goes wrong
 
@@ -192,7 +213,7 @@ are deleted. The policy report adds `disallow-host-path` and `prevent-bare-pods`
 | `Error: plugin "ngt-airflow-patches" not found` | The post-renderer isn't installed on this machine | Step 2's `helm plugin install` |
 | `helm repo add` or `dependency build` times out | The machine has no internet: Airflow's chart comes from airflow.apache.org | Run Helm where there is, still through the tunnel |
 | Two instances, one UI | Two namespaces can't share a host, and here they never do | `kubectl get ingress -A` |
-| Anything about the tunnel, kubeconfig, Harbor or the CA | As for the one-pod | [Its table](../daq-dev/README.md#if-something-goes-wrong) |
+| Anything about the tunnel, kubeconfig, Harbor, the CA or a new namespace | As for the one-pod | [Its table](../daq-dev/README.md#if-something-goes-wrong) |
 | A step task fails at once: `Frontier isn't reachable through frontier_proxy.py` | The P5 proxy refused, or isn't reachable from that node | The forwarder's own log follows in the task's log. If it persists, ask the sysadmins about `cmsproxy.cms` |
 | A step pod stays `Pending`: `didn't match Pod's node affinity` or `Insufficient cpu` | The three nodes with the el8 install are busy, or their names changed | `kubectl -n $NS describe pod -l app=ngt-airflow-step`; the node list is in `values-cmssw.yaml` |
 | A step pod's events: `hostPath type check failed: /opt/offline-el8` | That node has no el8 install | Take it out of `values-cmssw.yaml`'s list |

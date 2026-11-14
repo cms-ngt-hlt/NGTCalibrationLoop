@@ -26,7 +26,7 @@ VALUES = CONTAINERS / "daq-dev-multipod" / "values.yaml"
 
 ALLOWED_REGISTRIES = ("harbor.cms", "gitlab-registry.cern.ch")
 ALLOWED_HOSTNAMES = re.compile(r".*\.daq-dev\.cms\.cern\.ch$")
-# The tenant's LimitRange, per container.
+# The tenant's LimitRange, per container, with the CPU maximum it had until November 2026 kept as a bound.
 CONTAINER_MIN = {"cpu": 40, "memory": 40}
 CONTAINER_MAX = {"cpu": 32000, "memory": 64 * 1024}
 # The StorageClasses the Tenant allows, by access mode, and their cap per volume.
