@@ -109,8 +109,14 @@ export NGT_FAULTS_DIR="$NGT_DEV_HOME/faults"
 # resolves a function before it searches \$PATH -- an exported one survives into
 # the job scripts the loops spawn and would run instead of bin/'s fake. Dropping
 # them here covers the whole chain, since a function can only arrive by
-# inheritance from the shell that sourced this file.
-unset -f cmsenv cmsrel cmsDriver.py cmsRun uploadConditions.py 2>/dev/null || true
+# inheritance from the shell that sourced this file. Unless CMSSW is meant to be
+# real (\$NGT_REAL_DEPENDENCIES has cmssw, as the scenario player reads it): then
+# the jobs' cmsenv is the release's, and puts its cmsDriver.py and cmsRun ahead of
+# bin/'s fakes. The upload stays the fake one, which ngtParameters.jsn names by path.
+case ",\${NGT_REAL_DEPENDENCIES:-}," in
+  *,cmssw,*) ;;
+  *) unset -f cmsenv cmsrel cmsDriver.py cmsRun uploadConditions.py 2>/dev/null || true ;;
+esac
 ENV
 
   python3 "$REPO_DIR/scenario-player/seed.py" setup

@@ -74,6 +74,27 @@ def test_path_alone_does_not_beat_an_exported_function(tmp_path, fake_bin):
     assert decoy_ran
 
 
+def _generated_env_sh(tmp_path):
+    sim_env = Path(__file__).resolve().parents[2] / "scenario-player" / "sim_env.sh"
+    home = tmp_path / "demo-env"
+    subprocess.run(
+        ["bash", "-c", f'export NGT_DEV_HOME="{home}" NGT_SIM_STUB_INSTALLED=1; source "{sim_env}" && sim_setup > /dev/null'],
+        check=True,
+    )
+    return (home / "env.sh").read_text(encoding="utf-8")
+
+
+def test_env_sh_keeps_a_real_cmsenv_only_where_cmssw_is_meant_to_be_real(tmp_path, fake_bin):
+    """sim_setup's own env.sh. The decoy stands for a release's cmsenv: with NGT_REAL_DEPENDENCIES=cmssw, as where the
+    scenario player plays scenarios needing real CMSSW, the jobs' cmsenv is the release's, not bin/'s fake."""
+    env_sh = _generated_env_sh(tmp_path)
+    stdout, decoy_ran = _run_job_with_decoy(tmp_path, fake_bin, env_sh)
+    assert "(FAKE) cmsenv: no-op" in stdout and not decoy_ran
+
+    stdout, decoy_ran = _run_job_with_decoy(tmp_path, fake_bin, f"export NGT_REAL_DEPENDENCIES=cmssw\n{env_sh}")
+    assert "DECOY cmsenv RAN" in stdout and decoy_ran
+
+
 def test_sim_env_generates_the_unset_line():
     """Ties UNSET_LINE above to what sim_setup actually writes, so changing one
     without the other fails instead of leaving the tests passing on a line the
