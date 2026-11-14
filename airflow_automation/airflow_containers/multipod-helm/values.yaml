@@ -53,8 +53,11 @@ stepPods:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: "1", memory: 512Mi}
+  securityContext: {}  # empty: Airflow's pods' (airflow.securityContexts.pod)
   nodeSelector: {}  # empty: Airflow's (airflow.nodeSelector)
   affinity: {}
+  # {file name: content}, at /opt/ngt-step-files in every step pod: what the script needs besides the image.
+  files: {}
   extraVolumes: []
   extraVolumeMounts: []
 

@@ -360,7 +360,9 @@ kubectl get pods -l app=ngt-airflow-step -w    # while a scenario plays
 - **What runs in them:** the library's step runner (`ngt_calibration_loop/run_step.py`), with the step's arguments. A
   step hands the next its result through the shared volume.
 - **The template:** `stepPods` in `values.yaml`. It uses Airflow's image and its fake toolchain, unless your values give
-  another image and the script that sets it up, such as a CMSSW one for real processing.
+  another image and the script that sets it up, such as a CMSSW one for real processing. Such an image can have its own
+  user (`stepPods.securityContext`) and files beside the script (`stepPods.files`, at `/opt/ngt-step-files`). It finds
+  the library on the data volume, at `/ngt-data/lib`, where the scheduler's setup copies Airflow's image's at each start.
 - **The scheduler gets what starting them takes:** a Role in the namespace (pods, their logs, events), and an API
   token, which the post-renderer projects in. Without this file it has neither.
 - **A failed pod is kept, to look at,** with `kubectl logs <pod>`. Its task in the UI shows the same output.

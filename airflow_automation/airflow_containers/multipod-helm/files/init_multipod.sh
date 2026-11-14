@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # What the multi-pod deployment runs before Airflow's components, as an init container of the scheduler (../values.yaml):
-# the database migrated, the fake data set up the first time, and the admin login. The other components wait for the
-# migrations, and the triggerer and the tools pod for the fake data as well. Everything it makes is on persistent
-# volumes, so a restart only migrates again.
+# the database migrated, the fake data set up the first time, the library for step pods, and the admin login. The other
+# components wait for the migrations, and the triggerer and the tools pod for the fake data as well. Everything it makes
+# is on persistent volumes, so a restart only migrates again.
 set -euo pipefail
 
 # Postgres is a pod of its own, which may still be starting.
@@ -16,6 +16,15 @@ if [ -f "$NGT_DEV_HOME/env.sh" ]; then
 else
   airflow_demo.sh setup
 fi
+
+# Step pods of another image (stepPods.image), such as a CMSSW one, run the library from the data volume: this
+# image's, so it follows each upgrade. Copied whole, then swapped in, as one of them may be importing it.
+lib="$(dirname "$NGT_DEV_HOME")/lib"
+rm -rf "$lib.new"
+mkdir -p "$lib.new"
+cp -r "$(python3 -c 'import ngt_calibration_loop, os; print(os.path.dirname(ngt_calibration_loop.__file__))')" "$lib.new/"
+rm -rf "$lib"
+mv "$lib.new" "$lib"
 
 # Once, with the Secret's password, which the database then keeps: changing it later is done in the UI.
 if ! airflow users list --output json \

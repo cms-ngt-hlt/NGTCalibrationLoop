@@ -128,6 +128,7 @@ def test_setup_script_sets_up_the_first_time_and_only_migrates_after(tmp_path):
     (tmp_path / "home" / "logs").mkdir(parents=True)
     env = {
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "PYTHONPATH": str(REPO_ROOT),
         "NGT_DEV_HOME": str(tmp_path / "demo-env"),
         "AIRFLOW_HOME": str(tmp_path / "home"),
         "NGT_ADMIN_PASSWORD": "secret",
@@ -141,6 +142,9 @@ def test_setup_script_sets_up_the_first_time_and_only_migrates_after(tmp_path):
         "--email admin@example.invalid --password secret",
         "airflow db migrate",
     ]
+    # The library, beside $NGT_DEV_HOME, for step pods of another image: each time, so it follows the image.
+    assert (tmp_path / "lib" / "ngt_calibration_loop" / "run_step.py").is_file()
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("lib")) == ["lib"]
 
 
 @needs_bash
@@ -310,13 +314,17 @@ def test_step_pods_are_off_unless_asked_for(render_chart):
 
 def test_step_pods_come_from_a_template_only_the_scheduler_may_start(render_chart):
     docs = _by_name(render_chart("ngt-any", MULTIPOD / "values-step-pods.yaml"))
-    pod = yaml.safe_load(docs[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"])
+    template = docs[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"]
+    pod = yaml.safe_load(template)
     _check_pod("step pod", pod["spec"])
     assert pod["spec"]["restartPolicy"] == "Never"
     (base,) = pod["spec"]["containers"]
     assert base["name"] == "base" and base["image"] == "ngt-airflow:dev", "KubernetesPodOperator's container, Airflow's image"
     assert base["command"][-1] == "run_step" and "python3 -m ngt_calibration_loop.run_step" in base["command"][2]
     assert {"name": "ngt-data", "persistentVolumeClaim": {"claimName": "ngt-airflow-data"}} in pod["spec"]["volumes"]
+    assert pod["spec"]["securityContext"] == _values()["airflow"]["securityContexts"]["pod"], "Airflow's, as its image"
+    assert ("ConfigMap", "ngt-airflow-step-files") not in docs, "no files unless stepPods.files gives some"
+    assert not re.search(r"\{[{%#]", template), "KubernetesPodOperator renders the template with Jinja"
 
     role = docs[("Role", "ngt-airflow-step-pods")]
     assert {r for rule in role["rules"] for r in rule["resources"]} == {"pods", "pods/log", "events"}
@@ -331,6 +339,26 @@ def test_step_pods_come_from_a_template_only_the_scheduler_may_start(render_char
     for component in ("ngt-scheduler", "ngt-dag-processor", "ngt-triggerer", "ngt-api-server"):
         ref = _airflow_env(docs[("Deployment", component)])["NGT_STEP_POD_TEMPLATE"]["valueFrom"]["configMapKeyRef"]
         assert ref == {"name": "ngt-airflow-step-pod", "key": "pod.yaml"}, component
+
+
+def test_step_pods_of_another_image_get_its_user_and_their_files(render_chart, tmp_path):
+    values = tmp_path / "other-image.yaml"
+    values.write_text(
+        "stepPods:\n"
+        "  image: registry.example/cmssw:any\n"
+        "  securityContext: {runAsNonRoot: true, runAsUser: 1234, seccompProfile: {type: RuntimeDefault}}\n"
+        "  files: {setup.sh: 'echo set up'}\n",
+        encoding="utf-8",
+    )
+    docs = _by_name(render_chart("ngt-any", MULTIPOD / "values-step-pods.yaml", values))
+    pod = yaml.safe_load(docs[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"])
+    _check_pod("step pod", pod["spec"])
+    assert pod["spec"]["securityContext"]["runAsUser"] == 1234
+    (base,) = pod["spec"]["containers"]
+    assert base["image"] == "registry.example/cmssw:any"
+    assert docs[("ConfigMap", "ngt-airflow-step-files")]["data"] == {"setup.sh": "echo set up"}
+    assert {"name": "step-files", "configMap": {"name": "ngt-airflow-step-files"}} in pod["spec"]["volumes"]
+    assert {"name": "step-files", "mountPath": "/opt/ngt-step-files", "readOnly": True} in base["volumeMounts"]
 
 
 def test_postgres_runs_as_its_own_user_on_a_volume_it_can_write(render_chart):
