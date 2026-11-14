@@ -162,6 +162,13 @@ def test_lumisections_survive_all_three_steps(chain):
     assert manifest["lumisections"] == [51, 52, 53]
 
 
+def test_a_file_holding_several_lumisections_brings_them_all_to_the_payload(chain):
+    raw = chain / "run398600_ls0051-0054.root"
+    raw.write_bytes(b"(FAKE) raw data placeholder\n")
+    _cms_job(chain, step_arg="RAW2DIGI,RECO", inputs=[f"file:{raw}"], python_filename="s2.py", fileout="out.root")
+    assert fake_conddb.read_provenance(chain / "out.root")["lumisections"] == [51, 52, 53, 54]
+
+
 def test_a_harvest_merges_the_lumisections_of_several_step3_outputs(chain):
     manifest = _harvest_of_two_step3_outputs(chain, ["alcaPromptJob000", "alcaPromptJob001"])
     assert manifest["lumisections"] == [51, 52, 53, 54]
@@ -222,6 +229,14 @@ def test_edmfileutil_reads_a_file_through_either_prefix(chain):
     raw.write_bytes(b"(FAKE) raw data placeholder\n")
     for url in (f"root://eoscms.cern.ch/{raw}", f"file:{raw}"):
         assert _run("edmFileUtil", [url, "--eventsInLumi"], chain).stdout.split()[:2] == ["398600", "51"]
+
+
+def test_edmfileutil_lists_every_lumisection_of_a_file_holding_several(chain):
+    """As the real one does, one line each, which is what step 2 reads its output's LS range from."""
+    raw = chain / "run403634_ls1246-1259_370f0750.root"
+    raw.write_bytes(b"(FAKE) raw data placeholder\n")
+    lines = _run("edmFileUtil", [f"file:{raw}", "--eventsInLumi"], chain).stdout.splitlines()
+    assert [line.split()[:2] for line in lines] == [["403634", str(ls)] for ls in range(1246, 1260)]
 
 
 @pytest.mark.parametrize(

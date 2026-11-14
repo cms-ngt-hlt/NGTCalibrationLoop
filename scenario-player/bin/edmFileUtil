@@ -5,8 +5,9 @@
 NGTLoopStep2.py only ever calls this with a single file URL and parses the
 "run  lumisection  events" table it prints. Real files carry that info inside
 CMSSW's ROOT metadata; our fake files instead carry it in their filename, using
-the convention `run<RUN6DIGIT>_ls<LS>....root` (see scenario-player/seed.py's seed-run
-and add-ls subcommands, which create files following it).
+the convention `run<RUN6DIGIT>_ls<LS>....root`, or `run<RUN6DIGIT>_ls<FIRST>-<LAST>....root`
+for a file holding several lumisections (see scenario-player/seed.py's seed-run and add-ls
+subcommands, which create files following it). It prints one line per lumisection.
 
 A file with a name that doesn't match the convention -- or that doesn't exist --
 is reported as "ERR", the same signal NGTLoopStep2.py's GetListOfAvailableFiles
@@ -25,16 +26,17 @@ def main():
     path = next((url[len(p):] for p in PREFIXES if url.startswith(p)), url)
 
     basename = os.path.basename(path)
-    match = re.match(r"run(\d{6})_ls(\d+)", basename)
+    match = re.match(r"run(\d{6})_ls(\d+)(?:-(\d+))?", basename)
 
     if not match or not os.path.exists(path):
         print(f"ERR: (FAKE) edmFileUtil could not read {path}")
         return
 
     run_number = int(match.group(1))
-    ls_number = int(match.group(2))
+    first = int(match.group(2))
     events = 1000
-    print(f"{run_number:>15}{ls_number:>13}{events:>13}")
+    for ls_number in range(first, int(match.group(3) or first) + 1):
+        print(f"{run_number:>15}{ls_number:>13}{events:>13}")
 
 
 if __name__ == "__main__":

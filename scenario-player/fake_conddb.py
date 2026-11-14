@@ -4,7 +4,7 @@ Standard library only -- the fakes in bin/ import it from the directory above, l
 
 A provenance manifest is what a fake cmsRun output contains: a magic first line, then one JSON
 object naming the calibration/run/lumisections that went into it -- the union of its inputs'
-manifests or, for a raw file seed.py wrote, the LS in its run<RUN>_ls<LS> name. So identifiers
+manifests or, for a raw file seed.py wrote, the LS its run<RUN>_ls<LS>[-<LAST>] name gives. So identifiers
 travel the real data path, step2 -> step3 -> step4.
 
 The ledger, $NGT_DEV_HOME/conddb/payloads.jsonl, gets one JSON line per successful fake upload,
@@ -23,8 +23,9 @@ import faults  # scenario-player/faults.py: on sys.path wherever this module is 
 
 PROVENANCE_MAGIC = "(FAKE-NGT-PROVENANCE-v1)"
 SQLITE_MAGIC = b"SQLite format 3\x00"  # how every conditions .db CMSSW writes starts
-# How seed.py names the raw files (bin/edmFileUtil parses the same): run<RUN>_ls<LS>....root.
-RAW_LS_RE = re.compile(r"run(\d+)_ls(\d+)")
+# How seed.py names the raw files (bin/edmFileUtil parses the same): run<RUN>_ls<LS>....root, or
+# run<RUN>_ls<FIRST>-<LAST>....root for a file holding several lumisections.
+RAW_LS_RE = re.compile(r"run(\d+)_ls(\d+)(?:-(\d+))?")
 CONDDB_DIR_NAME = "conddb"
 LEDGER_NAME = "payloads.jsonl"
 
@@ -106,7 +107,10 @@ def lumisections_of_input(path):
     if manifest is not None:
         return set(manifest.get("lumisections", []))
     match = RAW_LS_RE.search(os.path.basename(str(path)))
-    return {int(match.group(2))} if match else set()
+    if not match:
+        return set()
+    first = int(match.group(2))
+    return set(range(first, int(match.group(3) or first) + 1))
 
 
 def merge_input_lumisections(paths):

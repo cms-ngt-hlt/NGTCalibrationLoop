@@ -4,7 +4,7 @@ runs:
   - calibrations: [EcalPedestals]
     run: 403634
     lumisections:
-      - {ls: 1246, after: 0, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0.root}
+      - {ls: 1246-1259, after: 0, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0.root}
     end_after: 60
 
 calibration_config:

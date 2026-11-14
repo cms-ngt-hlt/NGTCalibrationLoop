@@ -175,10 +175,33 @@ def test_play_fires_events_in_order_with_expected_arguments(monkeypatch):
 
     assert calls == [
         ("seed_run", ("EcalPedestals", 398600), {"minutes_ago": 3.0, "ls": []}),
-        ("add_ls", ("EcalPedestals", 398600, 51), {"source": None}),
-        ("add_ls", ("EcalPedestals", 398600, 52), {"source": None}),
+        ("add_ls", ("EcalPedestals", 398600, 51), {"source": None, "last": None}),
+        ("add_ls", ("EcalPedestals", 398600, 52), {"source": None, "last": None}),
         ("end_run", (398600,), {}),
     ]
+
+
+@pytest.mark.parametrize(
+    "ls, first, last, shown",
+    [(51, 51, None, "--ls 51"), ("1246-1259", 1246, 1259, "--ls 1246-1259"), ("7 - 7", 7, None, "--ls 7")],
+)
+def test_an_entry_is_one_file_holding_one_lumisection_or_a_range(monkeypatch, ls, first, last, shown):
+    calls = _record_seed_calls(monkeypatch)
+    monkeypatch.setattr(scenario_player.time, "sleep", lambda _seconds: None)
+    spec = {"calibrations": ["EcalPedestals"], "run": 403634, "end_after": 1, "lumisections": [{"ls": ls, "after": 0}]}
+
+    events = scenario_player.build_timeline({"runs": [spec]})
+    scenario_player.play(events, log=lambda _msg: None)
+
+    assert ("add_ls", ("EcalPedestals", 403634, first), {"source": None, "last": last}) in calls
+    assert next(e for e in events if e.kind == "add_ls").describe().endswith(shown)
+
+
+@pytest.mark.parametrize("ls", ["1259-1246", "0", 0, "1246-", "LS1246", None, "1-2-3", True])
+def test_an_entry_names_its_lumisections_plainly(ls):
+    spec = {"calibrations": ["EcalPedestals"], "run": 403634, "lumisections": [{"ls": ls, "after": 0}]}
+    with pytest.raises(ValueError, match="run 403634: a lumisection"):
+        scenario_player.build_timeline({"runs": [spec]})
 
 
 def test_a_lumisection_can_be_a_real_file_which_must_exist(monkeypatch, tmp_path):
@@ -193,7 +216,7 @@ def test_a_lumisection_can_be_a_real_file_which_must_exist(monkeypatch, tmp_path
     events = scenario_player.build_timeline({"runs": [spec]})
     scenario_player.play(events, log=lambda _msg: None)
 
-    assert ("add_ls", ("EcalPedestals", 403634, 1246), {"source": str(real)}) in calls
+    assert ("add_ls", ("EcalPedestals", 403634, 1246), {"source": str(real), "last": None}) in calls
     assert "--file " + str(real) in next(e for e in events if e.kind == "add_ls").describe()
     spec["lumisections"][0]["file"] = str(tmp_path / "not-here.root")
     with pytest.raises(ValueError, match="doesn't exist here"):
@@ -215,6 +238,15 @@ def test_staging_a_real_file_links_it_under_a_name_edmfileutil_reads(monkeypatch
     assert staged.name == "run403634_ls1246_370f0750.root" and staged.is_symlink()
     assert staged.resolve() == real.resolve() and staged.read_bytes() == b"real RAW, say"
     assert fake_conddb.lumisections_of_input(staged) == {1246}
+
+    # A file holding several, as this one does: the name gives the range, and OMS's last LS is its last.
+    staged = seed.add_ls("EcalPedestals", 403634, 1246, source=real, last=1259)
+    assert staged.name == "run403634_ls1246-1259_370f0750.root"
+    assert fake_conddb.lumisections_of_input(staged) == set(range(1246, 1260))
+    assert seed._load_runs()[0]["last_lumisection_number"] == 1259
+    placeholder = seed.add_ls("EcalPedestals", 403634, 1260, last=1262)
+    assert placeholder.name == "run403634_ls1260-1262.root"
+    assert fake_conddb.lumisections_of_input(placeholder) == {1260, 1261, 1262}
 
 
 def test_calibration_config_merges_into_the_scratch_copy_until_a_reset(monkeypatch, tmp_path):

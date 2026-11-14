@@ -67,16 +67,37 @@ def _run_eos_dir(calibration, run_number):
     return _eos_dir(calibration) / _run_str(run_number) / "00000"
 
 
-def _touch_ls_file(eos_dir, run_number, ls_number):
-    path = eos_dir / f"run{run_number}_ls{ls_number:04d}.root"
+def parse_ls(value):
+    """A lumisection, 51, or the inclusive range a file holding several covers, "1246-1259", as (first, last)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        first, last = value, value
+    else:
+        bounds = str(value).replace(" ", "").split("-")
+        if len(bounds) != 2 or not all(b.isdigit() for b in bounds):
+            raise ValueError(f"a lumisection is a number or a range like 1246-1259, got {value!r}")
+        first, last = int(bounds[0]), int(bounds[1])
+    if not 0 < first <= last:
+        raise ValueError(f"a lumisection range runs from a positive first to a last no smaller, got {value!r}")
+    return first, last
+
+
+def _ls_name(run_number, ls_number, last=None):
+    """How a raw file is named, so that bin/edmFileUtil and fake_conddb.py read its run and lumisections from it:
+    run<RUN>_ls<LS>, or run<RUN>_ls<FIRST>-<LAST> for a file holding several."""
+    span = f"{ls_number:04d}" if last in (None, ls_number) else f"{ls_number:04d}-{last:04d}"
+    return f"run{run_number}_ls{span}"
+
+
+def _touch_ls_file(eos_dir, run_number, ls_number, last=None):
+    path = eos_dir / f"{_ls_name(run_number, ls_number, last)}.root"
     path.write_bytes(b"(FAKE) raw data placeholder -- see scenario-player/bin/edmFileUtil\n")
     return path
 
 
-def _stage_file(eos_dir, run_number, ls_number, source):
+def _stage_file(eos_dir, run_number, ls_number, source, last=None):
     """A real file as one of the run's: a link to it, named so that bin/edmFileUtil reads the run and LS from it."""
     source = Path(source).resolve()
-    path = eos_dir / f"run{run_number}_ls{ls_number:04d}_{source.name}"
+    path = eos_dir / f"{_ls_name(run_number, ls_number, last)}_{source.name}"
     if path.is_symlink() or path.exists():
         path.unlink()
     path.symlink_to(source)
@@ -150,21 +171,24 @@ def seed_run(calibration, run, minutes_ago=2, ls=None):
     return eos_dir
 
 
-def add_ls(calibration, run, ls, source=None):
+def add_ls(calibration, run, ls, source=None, last=None):
     """Drop one more fake RAW LS file for an already-seeded run -- or, given `source`, a real file
-    standing for it. Library form of the `add-ls` CLI verb -- see cmd_add_ls. Raises ValueError if
-    `run` hasn't been seeded yet."""
+    standing for it. With `last`, the file holds lumisections `ls` to `last`, as a real one often
+    does. Library form of the `add-ls` CLI verb -- see cmd_add_ls. Raises ValueError if `run`
+    hasn't been seeded yet."""
     runs = _load_runs()
     if not any(r["run_number"] == run for r in runs):
         raise ValueError(f"No such run {run} in {OMS_RUNS_FILE} -- run seed-run first")
     for r in runs:
         if r["run_number"] == run:
-            r["last_lumisection_number"] = max(r.get("last_lumisection_number", 0), ls)
+            r["last_lumisection_number"] = max(r.get("last_lumisection_number", 0), ls if last is None else last)
     _save_runs(runs)
 
     eos_dir = _run_eos_dir(calibration, run)
     eos_dir.mkdir(parents=True, exist_ok=True)
-    return _stage_file(eos_dir, run, ls, source) if source else _touch_ls_file(eos_dir, run, ls)
+    if source:
+        return _stage_file(eos_dir, run, ls, source, last)
+    return _touch_ls_file(eos_dir, run, ls, last)
 
 
 def end_run(run):
@@ -208,12 +232,20 @@ def cmd_seed_run(args):
 
 
 def cmd_add_ls(args):
+    first, last = args.ls
     try:
-        path = add_ls(args.calibration, args.run, args.ls, source=args.file)
+        path = add_ls(args.calibration, args.run, first, source=args.file, last=last if last != first else None)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
-    print(f"Added LS {args.ls} for run {args.run}: {path}")
+    print(f"Added LS {first if last == first else f'{first}-{last}'} for run {args.run}: {path}")
+
+
+def _ls_arg(value):
+    try:
+        return parse_ls(int(value) if value.isdigit() else value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def cmd_end_run(args):
@@ -273,7 +305,7 @@ def main():
     p_add = sub.add_parser("add-ls", help="Drop one more fake RAW LS file for an already-seeded run")
     p_add.add_argument("--calibration", required=True, choices=CALIBRATIONS)
     p_add.add_argument("--run", required=True, type=int)
-    p_add.add_argument("--ls", required=True, type=int)
+    p_add.add_argument("--ls", required=True, type=_ls_arg, help="a lumisection, or the range one file holds: 1246-1259")
     p_add.add_argument("--file", help="a real file to stand for this LS (linked, not copied), instead of a placeholder")
     p_add.set_defaults(func=cmd_add_ls)
 

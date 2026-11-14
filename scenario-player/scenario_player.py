@@ -32,9 +32,12 @@ which is the physically sensible way to model "multiple calibrations
 processing concurrently" -- not two different run numbers overlapping in
 time. See scenario-player/scenarios/*.yaml for more worked examples.
 
-A lumisection can name a real file to stand for it, `{ls: 1246, after: 0, file: /path/to/raw.root}`:
-it is linked into the fake EOS directory under a name the fake edmFileUtil reads the run and LS
-from, for steps that run real CMSSW on it. A top-level `calibration_config:` map is merged into the
+An entry can stand for one file holding several lumisections, as real files often do:
+`{ls: 1246-1259, after: 0}`. And it can name a real file to stand for it,
+`{ls: 1246-1259, after: 0, file: /path/to/raw.root}`: that is linked into the fake EOS directory
+under a name the fake edmFileUtil reads the run and lumisections from, for steps that run real
+CMSSW on it. The range should be the lumisections the file holds: nothing here can check that, and
+real CMSSW reads them from the file itself. A top-level `calibration_config:` map is merged into the
 scratch calibrationYAML copies when playback starts, until the next reset: e.g. a harvester's
 threshold lowered for a small real input. Scenarios like that, which need a real file and steps that
 run real CMSSW, live in scenario-player/scenarios/real-cmssw/.
@@ -180,13 +183,15 @@ class Event:
     minutes_ago: float = 2.0
     fault: Optional[ngt_faults.FaultSpec] = None
     source: Optional[str] = None  # add_ls: a real file standing for the LS
+    last_ls: Optional[int] = None  # add_ls: the last of the lumisections one file holds, from `ls: 1246-1259`
 
     def describe(self):
         if self.kind == "start_run":
             return f"seed-run --calibration {self.calibration} --run {self.run}"
         if self.kind == "add_ls":
             file = f" --file {self.source}" if self.source else ""
-            return f"add-ls --calibration {self.calibration} --run {self.run} --ls {self.ls}{file}"
+            span = self.ls if self.last_ls is None else f"{self.ls}-{self.last_ls}"
+            return f"add-ls --calibration {self.calibration} --run {self.run} --ls {span}{file}"
         if self.kind == "fault":
             return _describe_fault(self.fault)
         return f"end-run --run {self.run}"
@@ -195,7 +200,7 @@ class Event:
         if self.kind == "start_run":
             seed.seed_run(self.calibration, self.run, minutes_ago=self.minutes_ago, ls=[])
         elif self.kind == "add_ls":
-            seed.add_ls(self.calibration, self.run, self.ls, source=self.source)
+            seed.add_ls(self.calibration, self.run, self.ls, source=self.source, last=self.last_ls)
         elif self.kind == "end_run":
             seed.end_run(self.run)
         elif self.kind == "fault":
@@ -282,8 +287,14 @@ def build_timeline(scenario):
         for ls_spec in spec.get("lumisections", []):
             t += float(ls_spec.get("after", 0))
             source = _real_file(run, ls_spec)
+            try:
+                first, last = seed.parse_ls(ls_spec.get("ls"))
+            except ValueError as exc:
+                raise ValueError(f"run {run}: {exc}") from exc
             for calibration in calibrations:
-                events.append(Event(t, "add_ls", calibration, run, ls=ls_spec["ls"], source=source))
+                events.append(
+                    Event(t, "add_ls", calibration, run, ls=first, source=source, last_ls=last if last != first else None)
+                )
         t += float(spec.get("end_after", 0))
         events.append(Event(t, "end_run", calibrations[0], run))
 

@@ -512,11 +512,14 @@ expect:
 
 ### Real files, real CMSSW
 
-A lumisection in a scenario can name a real file to stand for it: `{ls: 1246, after: 0, file: <path>}`
+A lumisection entry can stand for one file holding several, as real files do: `{ls: 1246-1259,
+after: 0}`. It can also name a real file to stand for it: `{ls: 1246-1259, after: 0, file: <path>}`
 (`$VARS` expanded, checked before anything plays). The file is linked into the fake EOS directory as
-`run<RUN>_ls<LS>_<its name>`, so the fake `edmFileUtil` still reads the run and LS off the name. The
-fake EOS is a directory, so `sim_env.sh` sets `ngtParameters.jsn`'s `INPUT_URL_PREFIX` to `file:`. Step
-2's job then reads the file directly rather than through `root://eoscms.cern.ch/`.
+`run<RUN>_ls<FIRST>-<LAST>_<its name>` (`run<RUN>_ls<LS>_...` for one), so the fake `edmFileUtil` still
+reads the run and lumisections off the name; a placeholder is named the same way. The range should be
+what the file holds: real CMSSW reads it from the file itself. The fake EOS is a directory, so
+`sim_env.sh` sets `ngtParameters.jsn`'s `INPUT_URL_PREFIX` to `file:`. Step 2's job then reads the file
+directly rather than through `root://eoscms.cern.ch/`.
 
 A top-level `calibration_config:` is merged into `$NGT_DEV_HOME/calibrationYAML` when playback starts,
 until the next reset: maps merge, anything else replaces. A real run of the `EcalPedestals` steps uses
