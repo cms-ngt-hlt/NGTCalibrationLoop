@@ -58,6 +58,8 @@ stepPods:
   affinity: {}
   # {file name: content}, at /opt/ngt-step-files in every step pod: what the script needs besides the image.
   files: {}
+  # What the image runs for real, such as [cmssw]: the scenario player refuses a scenario that needs otherwise.
+  realDependencies: []
   extraVolumes: []
   extraVolumeMounts: []
 

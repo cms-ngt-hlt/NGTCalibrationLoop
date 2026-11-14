@@ -324,6 +324,8 @@ def test_step_pods_come_from_a_template_only_the_scheduler_may_start(render_char
     assert {"name": "ngt-data", "persistentVolumeClaim": {"claimName": "ngt-airflow-data"}} in pod["spec"]["volumes"]
     assert pod["spec"]["securityContext"] == _values()["airflow"]["securityContexts"]["pod"], "Airflow's, as its image"
     assert ("ConfigMap", "ngt-airflow-step-files") not in docs, "no files unless stepPods.files gives some"
+    tools = docs[("Deployment", "ngt-airflow-tools")]["spec"]["template"]["spec"]["containers"][0]
+    assert "NGT_REAL_DEPENDENCIES" not in {e["name"] for e in tools["env"]}, "the fakes, unless the values say"
     assert not re.search(r"\{[{%#]", template), "KubernetesPodOperator renders the template with Jinja"
 
     role = docs[("Role", "ngt-airflow-step-pods")]
@@ -347,10 +349,14 @@ def test_step_pods_of_another_image_get_its_user_and_their_files(render_chart, t
         "stepPods:\n"
         "  image: registry.example/cmssw:any\n"
         "  securityContext: {runAsNonRoot: true, runAsUser: 1234, seccompProfile: {type: RuntimeDefault}}\n"
-        "  files: {setup.sh: 'echo set up'}\n",
+        "  files: {setup.sh: 'echo set up'}\n"
+        "  realDependencies: [cmssw]\n",
         encoding="utf-8",
     )
     docs = _by_name(render_chart("ngt-any", MULTIPOD / "values-step-pods.yaml", values))
+    # Where scenarios are played from, so that the player refuses one needing fake CMSSW.
+    tools = docs[("Deployment", "ngt-airflow-tools")]["spec"]["template"]["spec"]["containers"][0]
+    assert {"name": "NGT_REAL_DEPENDENCIES", "value": "cmssw"} in tools["env"]
     pod = yaml.safe_load(docs[("ConfigMap", "ngt-airflow-step-pod")]["data"]["pod.yaml"])
     _check_pod("step pod", pod["spec"])
     assert pod["spec"]["securityContext"]["runAsUser"] == 1234

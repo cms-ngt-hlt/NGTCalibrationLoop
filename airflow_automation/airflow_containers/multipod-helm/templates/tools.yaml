@@ -41,6 +41,11 @@ spec:
                 secretKeyRef:
                   name: ngt-airflow
                   key: fernet-key
+            {{- if and .Values.stepPods.enabled .Values.stepPods.realDependencies }}
+            # What the step pods run for real: the scenario player, which runs here, refuses a scenario needing otherwise.
+            - name: NGT_REAL_DEPENDENCIES
+              value: {{ join "," .Values.stepPods.realDependencies | quote }}
+            {{- end }}
           resources:
             {{- toYaml .Values.tools.resources | nindent 12 }}
           # Ready once the scheduler's setup has made the fake data.
