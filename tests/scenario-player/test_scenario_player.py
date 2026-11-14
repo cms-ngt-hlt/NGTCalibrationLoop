@@ -287,6 +287,35 @@ def test_real_cmssw_scenarios_are_complete_but_for_their_input_files(monkeypatch
         assert scenario_player.build_timeline(scenario)
         scenario_player.calibration_config_of(scenario)
         assert ngt_expectations.parse_expectations(scenario["expect"]).payloads
+        assert scenario_player.dependencies_of(scenario) == {"cmssw": "real"}, f"{path.name}: say so, or it plays on fakes"
+
+
+def test_a_scenario_plays_only_where_its_dependencies_are_what_it_needs(monkeypatch):
+    fake, real = {"runs": []}, {"dependencies": {"cmssw": "real"}, "runs": []}
+    assert scenario_player.dependencies_of(fake) == {"cmssw": "fake"}, "fake unless the scenario says"
+
+    scenario_player.check_dependencies(fake, real_here=set())
+    scenario_player.check_dependencies(real, real_here={"cmssw"})
+    with pytest.raises(ValueError, match="needs cmssw real, and this deployment's is fake"):
+        scenario_player.check_dependencies(real, real_here=set())
+    monkeypatch.setenv("NGT_REAL_DEPENDENCIES", "cmssw")
+    with pytest.raises(ValueError, match=r"needs cmssw fake, and this deployment's is real \(NGT_REAL_DEPENDENCIES=cmssw\)"):
+        scenario_player.check_dependencies(fake)
+
+
+@pytest.mark.parametrize(
+    "dependencies, match",
+    [({"oms": "real"}, "only"), ({"inputs": "real"}, "file:"), ({"cmssw": True}, "real or fake"), (["cmssw"], "a map")],
+)
+def test_a_scenario_names_only_what_can_be_real(dependencies, match):
+    with pytest.raises(ValueError, match=match):
+        scenario_player.dependencies_of({"dependencies": dependencies})
+
+
+def test_every_other_scenario_plays_on_fakes():
+    for path in sorted((SCENARIO_PLAYER_DIR / "scenarios").glob("*.yaml")):
+        scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
+        scenario_player.check_dependencies(scenario, real_here=set())
 
 
 def test_play_fires_one_seed_run_and_add_ls_per_calibration_but_one_end_run(monkeypatch):
@@ -508,6 +537,24 @@ def test_only_list_calibrations_ignores_every_other_flag(monkeypatch, capsys, tm
     assert scenario_player.main() is None
     assert capsys.readouterr().out.splitlines() == ["SiStripBad"]
     assert calls == []
+
+
+def test_main_refuses_a_scenario_this_deployment_runs_otherwise_but_still_shows_it(monkeypatch, capsys, tmp_path):
+    calls = _record_seed_calls(monkeypatch)
+    monkeypatch.delenv("NGT_REAL_DEPENDENCIES", raising=False)
+    scenario = _write_scenario(
+        tmp_path,
+        {"dependencies": {"cmssw": "real"}, "runs": [{"calibrations": ["SiStripBad"], "run": 1, "end_after": 1}]},
+    )
+
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario)])
+    assert scenario_player.main() == scenario_player.EXIT_BAD_SCENARIO
+    assert "needs cmssw real, and this deployment's is fake" in capsys.readouterr().err
+    assert calls == [], "refused before anything was seeded"
+
+    monkeypatch.setattr(sys, "argv", ["scenario_player.py", str(scenario), "--dry-run"])
+    assert scenario_player.main() is None
+    assert "dependencies: real cmssw, the rest fake" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("extra_flags", [[], ["--only-list-calibrations"]])

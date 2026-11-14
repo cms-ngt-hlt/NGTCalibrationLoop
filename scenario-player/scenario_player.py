@@ -42,6 +42,13 @@ scratch calibrationYAML copies when playback starts, until the next reset: e.g. 
 threshold lowered for a small real input. Scenarios like that, which need a real file and steps that
 run real CMSSW, live in scenario-player/scenarios/real-cmssw/.
 
+A top-level `dependencies:` says what the scenario needs real: `{cmssw: real}`, steps that run real
+CMSSW. Anything it doesn't name is fake. A deployment says what it runs for real in
+$NGT_REAL_DEPENDENCIES (the multi-pod chart's stepPods.realDependencies), and the player refuses a
+scenario that doesn't match it, either way, before playing anything: real CMSSW fails on placeholder
+files, and fake CMSSW makes a payload the scenario didn't mean. A real file with fake CMSSW is fine:
+the fakes read its lumisections off its name.
+
 A top-level `faults:` list arms simulated OMS/cmsRun/upload_conditions.py failures on the
 same timeline: each entry is a faults.py fault plus `at`, seconds since playback start (see
 scenario-player/scenarios/fault_injection_demo.yaml).
@@ -56,7 +63,8 @@ settle and checks them, so a scenario passes or fails by itself:
         - {calibration: EcalPedestals, run: 398600, lumisections: 51-53}
 
 Exit codes: 0 = played, and the expectations (if any) held; 1 = they didn't, or the uploads never
-settled; 2 = a malformed scenario, or --interactive ran out of stdin; 130 = Ctrl-C.
+settled; 2 = a malformed scenario, one this deployment can't play (dependencies:), or --interactive
+ran out of stdin; 130 = Ctrl-C.
 
 This script only calls scenario-player/seed.py's library functions
 (seed_run/add_ls/end_run/arm_fault) and reads the ledger via
@@ -244,6 +252,46 @@ def _real_file(run, ls_spec):
     if not os.path.isfile(path):
         raise ValueError(f"run {run}: lumisection {ls_spec.get('ls')}'s file {path} doesn't exist here")
     return path
+
+
+# What a scenario can need real (`dependencies:`). OMS, EOS and the upload are always the fakes here, and a real input
+# is a lumisection entry's `file:`.
+DEPENDENCIES = ("cmssw",)
+# What a deployment runs for real, comma-separated: the multi-pod chart sets it from stepPods.realDependencies.
+REAL_DEPENDENCIES_ENV = "NGT_REAL_DEPENDENCIES"
+
+
+def dependencies_of(scenario):
+    """The scenario's `dependencies:`, {name: "real" or "fake"} for every one of DEPENDENCIES: fake unless it says."""
+    raw = scenario.get("dependencies") or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"dependencies: expected a map such as {{cmssw: real}}, got {raw!r}")
+    unknown = sorted(set(raw) - set(DEPENDENCIES))
+    if unknown:
+        raise ValueError(
+            f"dependencies: only {list(DEPENDENCIES)} can be real, got {unknown}: OMS, EOS and the upload are always "
+            "the fake ones, and a real input file is a lumisection entry's file:"
+        )
+    bad = {name: how for name, how in raw.items() if how not in ("real", "fake")}
+    if bad:
+        raise ValueError(f"dependencies: each is real or fake, got {bad}")
+    return {name: raw.get(name, "fake") for name in DEPENDENCIES}
+
+
+def check_dependencies(scenario, real_here=None):
+    """Refuse a scenario this deployment would run otherwise than it needs: real CMSSW on placeholder files fails, and
+    fake CMSSW makes a payload the scenario didn't mean. `real_here` is what's real here, by default $NGT_REAL_DEPENDENCIES."""
+    if real_here is None:
+        real_here = {name.strip() for name in os.environ.get(REAL_DEPENDENCIES_ENV, "").split(",") if name.strip()}
+    problems = []
+    for name, needed in dependencies_of(scenario).items():
+        here = "real" if name in real_here else "fake"
+        if needed != here:
+            problems.append(f"it needs {name} {needed}, and this deployment's is {here}")
+    if problems:
+        raise ValueError(
+            f"can't play here: {'; '.join(problems)} ({REAL_DEPENDENCIES_ENV}={','.join(sorted(real_here))})"
+        )
 
 
 def calibration_config_of(scenario):
@@ -496,10 +544,13 @@ def main():
     try:
         events = build_timeline(scenario)
         calibration_config = calibration_config_of(scenario)
+        dependencies = dependencies_of(scenario)
         raw_expect = scenario.get("expect") if isinstance(scenario, dict) else None
         expectations = (
             None if raw_expect is None or args.no_validate else ngt_expectations.parse_expectations(raw_expect)
         )
+        if not (args.dry_run or args.only_list_calibrations):
+            check_dependencies(scenario)
     except (ValueError, ngt_faults.FaultSpecError) as exc:
         print(f"{args.scenario}: {exc}", file=sys.stderr)
         return EXIT_BAD_SCENARIO
@@ -523,6 +574,8 @@ def main():
 
     if args.dry_run:
         show_timeline(events)
+        real = sorted(name for name, how in dependencies.items() if how == "real")
+        _emit(f"dependencies: real {', '.join(real)}, the rest fake" if real else "dependencies: all fake")
         if calibration_config:
             _emit(f"calibration_config: {calibration_config}")
         _emit(expectations.describe() if expectations else "expect: (none -- scenario is not self-validating)")

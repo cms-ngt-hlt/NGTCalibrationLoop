@@ -539,10 +539,17 @@ A top-level `calibration_config:` is merged into `$NGT_DEV_HOME/calibrationYAML`
 until the next reset: maps merge, anything else replaces. A real run of the `EcalPedestals` steps uses
 it to lower the pedestal harvester's threshold for an input of a few lumisections.
 
-What processes the file depends on where the steps run, not on the scenario:
-- **With the fake toolchain,** the steps are fake as usual.
+What processes the file depends on where the steps run:
+- **With the fake toolchain,** the steps are fake as usual. They read a real file's lumisections off its name, so a
+  scenario can test the plumbing with one.
 - **In pods of a CMSSW image,** the steps are real: the multi-pod deployment with `values-step-pods.yaml` and a
   cluster's CMSSW values.
+
+**What a scenario needs real** is its top-level `dependencies:`, `{cmssw: real}`, and anything it doesn't name is fake:
+OMS, EOS and the upload always are. A deployment says what it runs for real in `$NGT_REAL_DEPENDENCIES` (the
+multi-pod chart sets it from `stepPods.realDependencies`). The player refuses a scenario that doesn't match, either
+way, with exit code 2 before anything plays: real CMSSW fails on placeholder files, and fake CMSSW would make a payload
+the scenario didn't mean. `--dry-run` shows what it needs.
 
 **The upload stays the fake one.** It records a real `.db` too, by its job directory, as
 `"payload": "real"` with its size and checksum. Its lumisections aren't in it: the row takes them from

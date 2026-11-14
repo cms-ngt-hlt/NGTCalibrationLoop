@@ -1,5 +1,6 @@
 # Run 403634's real TestEnablesEcalHcal RAW (LS 1246-1259) through real CMSSW: needs steps that run CMSSW and the file
 # in inputs/ next to $NGT_DEV_HOME. It has too few events for ECAL's pedestal harvester at its usual threshold.
+dependencies: {cmssw: real}
 runs:
   - calibrations: [EcalPedestals]
     run: 403634
