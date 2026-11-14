@@ -8,10 +8,13 @@ CMSSW, condDB upload) are mocked -- see conftest.py.
 
 import json
 import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from support import stand_in_cmssw
 
 import NGTLoopStep4
 from conftest import _run_dir
@@ -186,6 +189,36 @@ def test_no_new_files_timeout_expired_moves_to_final(loop):
 
 
 # --- Harvesting job prep / launch / cleanup -------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs HARVESTING.sh with bash")
+@pytest.mark.parametrize(
+    "cms_run, uploaded",
+    [
+        (stand_in_cmssw.PAYLOAD, True),
+        (stand_in_cmssw.EMPTY_PAYLOAD, False),
+        (stand_in_cmssw.NO_PAYLOAD_FILE, False),
+        (stand_in_cmssw.FAILS, False),
+    ],
+)
+def test_harvesting_uploads_only_a_payload_its_cmsrun_wrote(loop, tmp_path, monkeypatch, cms_run, uploaded):
+    """HARVESTING.sh, run with bash under a stand-in CMSSW: it used to upload whatever was there, an empty payload
+    or none, after a failed cmsRun too."""
+    stand_in_cmssw.install(tmp_path / "bin", monkeypatch, cms_run)
+    (tmp_path / "cmssw" / "CMSSW_16_0_7_patch1" / "src").mkdir(parents=True)
+    run_dir = _run_dir(loop, 398600)
+    run_dir.mkdir(parents=True)
+    loop.TryLookForRun()
+    loop.CMSSWPath = f"{tmp_path / 'cmssw'}/"
+    _seed_step3_job_output(run_dir, "alcaPromptJob000")
+    loop.TryProcessFiles()
+    loop.ContinueAfterCheckFiles()
+    loop.TryPrepareHarvestingJobs()
+
+    job_dir = Path(loop.jobDir)
+    result = subprocess.run(["bash", "HARVESTING.sh"], cwd=job_dir, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == uploaded, result.stdout
+    assert (job_dir / "uploaded.txt").exists() == uploaded
 
 
 def test_prepare_and_launch_harvesting_job_writes_metadata_and_script(loop, popen_calls):

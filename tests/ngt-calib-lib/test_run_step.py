@@ -11,7 +11,7 @@ from pathlib import Path
 import omsapi
 import pytest
 
-from ngt_calibration_loop import run_step, step2
+from ngt_calibration_loop import run_step, step2, step4
 
 CALIBRATION = "EcalPedestals"
 RUN = 398601
@@ -120,6 +120,19 @@ def test_a_harvest_with_nothing_new_leaves_its_upload_nothing_to_do(isolated_env
     with pytest.raises(run_step.NothingToDo, match="Nothing harvested"):
         run_step.step4_upload(CALIBRATION, RUN, "file-a")
     assert len(job_runner) == launched
+
+
+def test_a_harvest_without_a_payload_is_nothing_to_do_and_leaves_the_upload_nothing(isolated_env, job_runner):
+    ctx = _seed_run()
+    _alca_output(ctx.working_dir / "alcaPromptJob_aaaaaaaaaa")
+    job_runner.queue_failure(returncode=step4.NO_PAYLOAD_EXIT_CODE, match="HARVESTING")
+
+    with pytest.raises(run_step.NothingToDo, match="No payload yet"):
+        run_step.step4_harvest(CALIBRATION, RUN, "file-a")
+    with pytest.raises(run_step.NothingToDo, match="Nothing harvested"):
+        run_step.step4_upload(CALIBRATION, RUN, "file-a")
+    # Nothing was recorded as harvested, so the run's next file harvests everything again.
+    assert run_step.step4_harvest(CALIBRATION, RUN, "file-b")["harvested_files"]
 
 
 def test_the_command_line_prints_the_result_or_exits_99_with_nothing_to_do(isolated_env, fake_eos, job_runner, capsys):

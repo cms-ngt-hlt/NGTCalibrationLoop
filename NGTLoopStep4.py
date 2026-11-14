@@ -299,7 +299,7 @@ class NGTLoopStep4:
                 f"""#!/bin/bash -ex
 
 export SCRAM_ARCH={self.scramArch}
-cd {self.CMSSWPath}/{self.cmsswVersion}/src
+cd {self.CMSSWPath}/{self.cmsswVersion}/src || exit 1
 cmsenv
 cd -
 
@@ -311,9 +311,19 @@ cat <<@EOF>> {python_filename}
 {python_config_mods}
 @EOF
 
-cmsRun {python_filename}
-
-if [ -f "promptCalibConditions.db" ]; then echo "DB file exists!"; else echo "DB file missing"; fi
+if ! cmsRun {python_filename}; then
+  echo "cmsRun failed"
+  exit 1
+fi
+if [ ! -f promptCalibConditions.db ]; then
+  echo "cmsRun wrote no promptCalibConditions.db"
+  exit 1
+fi
+# A harvester with too few entries for its thresholds leaves an empty payload: nothing to upload.
+if [ ! -s promptCalibConditions.db ]; then
+  echo "No payload: promptCalibConditions.db is empty"
+  exit 3
+fi
 mv promptCalibConditions.db {final_db_name}
         if [ -f "{metadata_file}" ]; then echo "Metadata file exists!"; \
 else echo "Metadata file missing"; fi

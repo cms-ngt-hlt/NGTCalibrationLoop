@@ -20,7 +20,13 @@ from typing import Optional
 class JobScriptFailedError(RuntimeError):
     """Raised when a launched job script exits non-zero, so the calling
     Airflow task fails (and is retried per its own retry policy) instead of
-    silently continuing as the original Popen-based code did."""
+    silently continuing as the original Popen-based code did. `returncode`
+    is the script's exit code, for a step whose script reports an outcome
+    with one (step4.NO_PAYLOAD_EXIT_CODE)."""
+
+    def __init__(self, message, returncode=None):
+        super().__init__(message)
+        self.returncode = returncode
 
 
 @dataclass
@@ -65,7 +71,8 @@ def run_job_script(script_name, cwd, stdout_log=None, stderr_log=None, timeout=N
     if result.returncode != 0:
         raise JobScriptFailedError(
             f"{script_name} in {cwd} exited with code {result.returncode}"
-            f" (see {stdout_log or 'stdout'}/{stderr_log or 'stderr'})"
+            f" (see {stdout_log or 'stdout'}/{stderr_log or 'stderr'})",
+            returncode=result.returncode,
         )
 
     logging.info(f"Job script {script_name} in {cwd} completed successfully")

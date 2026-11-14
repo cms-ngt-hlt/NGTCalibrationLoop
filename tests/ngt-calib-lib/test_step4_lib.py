@@ -10,11 +10,13 @@ steps.
 
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import yaml
+from support import stand_in_cmssw
 
 from ngt_calibration_loop import shell, step4
 
@@ -228,6 +230,56 @@ def test_run_harvesting_job_then_upload_conditions_are_separate_calls(isolated_e
     assert job_runner[1]["script_name"] == "UPLOAD.sh"
     upload_script = (job_spec.job_dir / "UPLOAD.sh").read_text(encoding="utf-8")
     assert f"uploadConditions.py {job_spec.final_db_name}" in upload_script
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs HARVESTING.sh with bash")
+@pytest.mark.parametrize(
+    "cms_run, outcome",
+    [
+        (stand_in_cmssw.PAYLOAD, None),
+        (stand_in_cmssw.EMPTY_PAYLOAD, step4.NoPayload),
+        (stand_in_cmssw.NO_PAYLOAD_FILE, shell.JobScriptFailedError),
+        (stand_in_cmssw.FAILS, shell.JobScriptFailedError),
+    ],
+)
+def test_the_harvest_tells_an_empty_payload_from_a_failure(isolated_env, tmp_path, monkeypatch, cms_run, outcome):
+    """HARVESTING.sh, run with bash under a stand-in CMSSW: an empty payload is no payload (the harvester found too
+    few entries), and a failed cmsRun or a missing payload fails, where it used to exit 0 either way."""
+    stand_in_cmssw.install(tmp_path / "bin", monkeypatch, cms_run)
+    (tmp_path / "cmssw" / "CMSSW_16_0_7_patch1" / "src").mkdir(parents=True)
+    _patch_calib_yaml(isolated_env, CALIBRATION, cmssw_base_path=f"{tmp_path / 'cmssw'}/")
+    run_dir = _run_dir(isolated_env, 398600)
+    run_dir.mkdir(parents=True)
+    ctx = step4.build_run_context(CALIBRATION, "398600")
+    _seed_step3_job_output(run_dir, "alcaPromptJob000")
+    job_spec = step4.prepare_harvesting_job(ctx, step4.check_files_for_processing(ctx).files_to_process)
+
+    if outcome is None:
+        step4.run_harvesting_job(job_spec)
+        assert (job_spec.job_dir / job_spec.final_db_name).read_text(encoding="utf-8") == "payload\n"
+    else:
+        with pytest.raises(outcome):
+            step4.run_harvesting_job(job_spec)
+        assert not (job_spec.job_dir / job_spec.final_db_name).exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs HARVESTING.sh with bash")
+def test_the_harvest_fails_without_its_release_area_instead_of_running_elsewhere(isolated_env, tmp_path, monkeypatch):
+    """Its `cd -` used to take a failed cd's job to whatever directory the caller had been in before."""
+    stand_in_cmssw.install(tmp_path / "bin", monkeypatch, stand_in_cmssw.PAYLOAD)
+    _patch_calib_yaml(isolated_env, CALIBRATION, cmssw_base_path=f"{tmp_path / 'no-such-area'}/")
+    run_dir = _run_dir(isolated_env, 398600)
+    run_dir.mkdir(parents=True)
+    ctx = step4.build_run_context(CALIBRATION, "398600")
+    _seed_step3_job_output(run_dir, "alcaPromptJob000")
+    job_spec = step4.prepare_harvesting_job(ctx, step4.check_files_for_processing(ctx).files_to_process)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("OLDPWD", str(elsewhere))
+
+    with pytest.raises(shell.JobScriptFailedError):
+        step4.run_harvesting_job(job_spec)
+    assert not list(elsewhere.iterdir())
 
 
 def test_upload_retries_independently_of_harvesting(isolated_env, job_runner):

@@ -11,7 +11,8 @@ A step hands the next one its result through a small JSON file in the run's work
 (`.ngt-results/<step>-<key>.json`, keyed by the input file), not through the engine, so a step that ran in a pod
 needs no channel back to Airflow. Each step removes its own previous result before it starts, so a later step only
 ever reads what this pass produced. A step that finds nothing to do raises NothingToDo, which the command line
-reports as exit code 99 and the DAGs turn into a skip.
+reports as exit code 99 and the DAGs turn into a skip: so does a harvest whose harvester wrote no payload, too few
+entries so far.
 """
 
 import argparse
@@ -103,7 +104,11 @@ def step4_harvest(calibration, run_number, file_path):
     job = step4.prepare_harvesting_job(ctx, decision.files_to_process)
     if job is None:
         raise NothingToDo("Nothing to harvest (input files vanished)")
-    step4.run_harvesting_job(job)
+    try:
+        step4.run_harvesting_job(job)
+    except step4.NoPayload as exc:
+        # Nothing recorded, so the upload has nothing to do; the run's next file harvests everything again.
+        raise NothingToDo(f"No payload yet: {exc}") from exc
     harvested = sorted(str(p) for p in job.input_files)
     logging.info(f"[{calibration} run {run_number}] Step 4 harvested {len(harvested)} accumulated file(s)")
     return _write_result(ctx.working_dir, "step4_harvest", file_path, {"harvested_files": harvested})

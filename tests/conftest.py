@@ -175,7 +175,8 @@ def job_runner(monkeypatch):
                 exc = shell.JobScriptFailedError(
                     f"simulated failure (exit code {returncode})"
                     if returncode is not None
-                    else "forced test failure"
+                    else "forced test failure",
+                    returncode=returncode,
                 )
             self._outcomes.append({"exc": exc, "match": match, "times_remaining": times})
 

@@ -29,9 +29,9 @@ def main():
     db_file = sys.argv[1] if len(sys.argv) > 1 else "<missing db file argument>"
     cond_auth_path = os.environ.get("COND_AUTH_PATH", "<unset>")
 
-    # HARVESTING.sh still calls this after its cmsRun failed and left no .db (Step 4 runs it with
-    # `bash`, so its shebang's -e doesn't apply): fail like a real upload, record nothing. The same
-    # for an empty .db, which a real harvester leaves when it found too little to write.
+    # A missing or empty .db (a real harvester leaves an empty one when it found too little to
+    # write): fail like a real upload, record nothing. HARVESTING.sh stops before uploading either,
+    # but an upload retried by hand, or an older script, may still get here.
     manifest = fake_conddb.read_provenance(db_file)
     real = fake_conddb.real_payload(db_file) if manifest is None else None
     if manifest is None and real is None:

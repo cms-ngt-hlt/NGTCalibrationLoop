@@ -41,6 +41,14 @@ TIMEOUT_SECONDS = DEFAULT_TIMEOUT_SECONDS  # kept for backward-compat imports/te
 PROCESSED_LOG_NAME = "allStep3FilesProcessed.log"
 RUN_END_LOG_NAME = "runEnd.log"
 RUN_START_LOG_NAME = "runStart.log"
+# HARVESTING.sh's exit code when cmsRun succeeded but the harvester wrote an empty payload: it had too few entries
+# for its thresholds (ECAL's pedestals from one file of run 403634: 16.5% of EB's channels, below its 30%).
+NO_PAYLOAD_EXIT_CODE = 3
+
+
+class NoPayload(Exception):
+    """The harvest ran, but its harvester found too little to write a payload. Not a failure: the next harvest of the
+    run, over more data, may write one."""
 
 
 @dataclass
@@ -204,7 +212,7 @@ def prepare_harvesting_job(ctx: RunContext, files_to_process) -> Optional[JobSpe
             f"""#!/bin/bash -ex
 
 export SCRAM_ARCH={ngt_params["SCRAM_ARCH"]}
-cd {ctx.cmssw_path}/{ngt_params["CMSSW_VERSION"]}/src
+cd {ctx.cmssw_path}/{ngt_params["CMSSW_VERSION"]}/src || exit 1
 cmsenv
 cd -
 
@@ -216,9 +224,19 @@ cat <<@EOF>> {python_filename}
 {python_config_mods}
 @EOF
 
-cmsRun {python_filename}
-
-if [ -f "promptCalibConditions.db" ]; then echo "DB file exists!"; else echo "DB file missing"; fi
+if ! cmsRun {python_filename}; then
+  echo "cmsRun failed"
+  exit 1
+fi
+if [ ! -f promptCalibConditions.db ]; then
+  echo "cmsRun wrote no promptCalibConditions.db"
+  exit 1
+fi
+# A harvester with too few entries for its thresholds leaves an empty payload: nothing to upload, and no failure.
+if [ ! -s promptCalibConditions.db ]; then
+  echo "No payload: promptCalibConditions.db is empty"
+  exit {NO_PAYLOAD_EXIT_CODE}
+fi
 mv promptCalibConditions.db {final_db_name}
 if [ -f "{metadata_filename}" ]; then echo "Metadata file exists!"; else echo "Metadata file missing"; fi
 """
@@ -234,11 +252,19 @@ if [ -f "{metadata_filename}" ]; then echo "Metadata file exists!"; else echo "M
 
 
 def run_harvesting_job(job_spec: JobSpec):
-    """Run HARVESTING.sh (ALCAHARVEST only) to completion. Raises
-    shell.JobScriptFailedError on failure so the Airflow task retries."""
-    return shell.run_job_script(
-        job_spec.script_name, job_spec.job_dir, stdout_log="stdout.log", stderr_log="stderr.log"
-    )
+    """Run HARVESTING.sh (ALCAHARVEST only) to completion. Raises NoPayload if the
+    harvester wrote an empty payload, and shell.JobScriptFailedError on any other
+    failure, so the Airflow task retries."""
+    try:
+        return shell.run_job_script(
+            job_spec.script_name, job_spec.job_dir, stdout_log="stdout.log", stderr_log="stderr.log"
+        )
+    except shell.JobScriptFailedError as exc:
+        if exc.returncode == NO_PAYLOAD_EXIT_CODE:
+            raise NoPayload(
+                f"the harvester in {job_spec.job_dir} wrote an empty payload: too few entries for its thresholds"
+            ) from exc
+        raise
 
 
 def upload_conditions(job_spec: JobSpec):
