@@ -332,6 +332,11 @@ The same mocks as above apply, except that job launches are intercepted one leve
   "nothing to do", its command line, and each output's lineage on the way.
 - `tests/ngt-calib-lib/test_lineage.py` -- `ngt_calibration_loop/lineage.py`, the lumisections and
   inputs beside each job's output.
+- `tests/ngt-calib-lib/test_steps_end_to_end.py` -- one file through every step as the DAGs run them, the job
+  scripts run for real in `sim_env.sh`'s scratch environment: on the fake toolchain by default, in seconds.
+  `pytest -m cmssw` runs the real-cmssw scenario's file (`NGT_TEST_INPUT`) with real CMSSW instead, in a shell where
+  `cmsset_default.sh` was sourced and a release `cmsenv`'d, which reaches Frontier: lxplus, a GitLab runner with
+  CVMFS, or a CMSSW pod. It is deselected by default, and no CI runs it.
 - `tests/scenario-player/test_scenario_player.py` -- `scenario-player/scenario_player.py`'s timeline-building
   (ordering, concurrent-run merging) and playback (event firing order/arguments), with
   `scenario-player/seed.py`'s functions monkeypatched out -- no filesystem/`$NGT_DEV_HOME` access

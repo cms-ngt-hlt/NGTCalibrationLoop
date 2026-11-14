@@ -76,6 +76,8 @@ pytest                              # Airflow-dependent tests skip cleanly when
 pytest -m scenario                  # the slow end-to-end FSM run, deselected by default
 pytest -m container                 # the same against the Airflow containers, needs Docker;
                                      # also deselected by default, and not run by CI
+pytest -m cmssw                     # one real file through every step with real CMSSW: needs a
+                                     # cmsenv'd shell and NGT_TEST_INPUT; deselected, not run by CI
 ```
 
 CI runs three workflows. `tests.yml` runs `pytest` on Python 3.8-3.12, so everything the suite
