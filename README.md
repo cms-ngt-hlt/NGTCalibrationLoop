@@ -522,7 +522,9 @@ expect:
   run climbs through growing payloads before the final one, while one *after* it is suspect. A
   duplicate is an *identical* lumisection set twice, not just a second upload.
 - The check waits for the uploads to go quiet, not for the expectations to hold -- that is what lets
-  `after: false` catch a late upload. Still arriving at `settle_timeout` means "timed out".
+  `after: false` catch a late upload. Still arriving at `settle_timeout` means "timed out". Quiet only
+  counts once there are as many uploads as listed payloads, which can't pass with fewer: real CMSSW's
+  first upload comes minutes after its file.
 - The shipped scenarios list each run's final payload and allow the rest:
   `allow_extra: {before: true, after: true}` and `allow_duplicates: true`, since these loops'
   Step 4 uploads the final payload again when the run ends.

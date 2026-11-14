@@ -421,6 +421,31 @@ def test_wait_for_settle_returns_once_the_ledger_goes_quiet(monkeypatch):
     assert now[0] >= 5  # it really did wait out quiet_for
 
 
+def test_wait_for_settle_waits_past_quiet_for_until_every_listed_entry_could_have_its_upload(monkeypatch):
+    """Real CMSSW's first upload comes minutes after its file: a quiet ledger with fewer uploads than entries isn't
+    settled, as it can't pass yet. The wait still ends at settle_timeout."""
+    expectations = ngt_expectations.parse_expectations({"quiet_for": 5, "settle_timeout": 100, "payloads": [one([51])]})
+    now = [0.0]
+    ledger = []
+
+    def lands_at_t30(path=None):
+        if now[0] >= 30 and not ledger:
+            ledger.append(row(1, [51]))
+        return list(ledger)
+
+    monkeypatch.setattr(ngt_expectations.fake_conddb, "read_ledger", lands_at_t30)
+    timing = {"log": lambda *a: None, "sleep": lambda s: now.__setitem__(0, now[0] + s), "clock": lambda: now[0]}
+
+    settled, rows = ngt_expectations.wait_for_settle(expectations, poll_interval=1, **timing)
+    assert settled is True and len(rows) == 1
+    assert 35 <= now[0] < 40, "the upload at t=30, then quiet_for"
+
+    now[0], ledger[:] = 0.0, []
+    monkeypatch.setattr(ngt_expectations.fake_conddb, "read_ledger", lambda path=None: [])
+    settled, rows = ngt_expectations.wait_for_settle(expectations, poll_interval=1, **timing)
+    assert settled is False and rows == [] and now[0] >= 100
+
+
 def test_wait_for_settle_reports_not_settled_when_uploads_keep_arriving(monkeypatch):
     expectations = ngt_expectations.parse_expectations({"quiet_for": 5, "settle_timeout": 20, "payloads": []})
 

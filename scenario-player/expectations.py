@@ -427,20 +427,24 @@ def wait_for_settle(
     poll_interval=DEFAULT_POLL_INTERVAL,
     skip=0,
 ):
-    """Poll the ledger until no upload has landed for quiet_for, or settle_timeout passes.
-    Returns (settled, rows): the rows after the first `skip`, and False if still arriving.
+    """Poll the ledger until no upload has landed for quiet_for, with at least one upload per
+    listed entry, or settle_timeout passes. Returns (settled, rows): the rows after the first
+    `skip`, and False if still arriving.
 
     Waiting for quiet, not for the expectations to hold, is what lets `allow_extra.after: false`
-    catch a late upload; a passing scenario pays with its last quiet_for seconds."""
+    catch a late upload; a passing scenario pays with its last quiet_for seconds. Fewer uploads
+    than listed entries can't pass, as each entry needs one of its own, so they are waited for:
+    real CMSSW's first upload comes minutes after its file, well past a quiet_for."""
     path = fake_conddb.ledger_path()
     started = last_change = clock()
     rows = fake_conddb.read_ledger(path)[skip:]
-    log(f"Waiting for uploads to settle ({len(rows)} so far; quiet_for={expectations.quiet_for:.0f}s, "
-        f"timeout={expectations.settle_timeout:.0f}s) -- {path}")
+    needed = len(expectations.payloads)
+    log(f"Waiting for uploads to settle ({len(rows)} so far, {needed} expected; quiet_for="
+        f"{expectations.quiet_for:.0f}s, timeout={expectations.settle_timeout:.0f}s) -- {path}")
 
     while True:
         now = clock()
-        if now - last_change >= expectations.quiet_for:
+        if now - last_change >= expectations.quiet_for and len(rows) >= needed:
             return True, rows
         if now - started >= expectations.settle_timeout:
             return False, rows
