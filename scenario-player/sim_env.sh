@@ -85,7 +85,8 @@ sim_setup() {
     "DATA_BASE_PATH": "$NGT_DEV_HOME/data",
     "LOG_BASE_PATH": "$NGT_DEV_HOME/logs",
     "COND_AUTH_PATH": "$NGT_DEV_HOME/cond_auth",
-    "INPUT_URL_PREFIX": "file:"
+    "INPUT_URL_PREFIX": "file:",
+    "CMSSW_AREA": "$NGT_DEV_HOME/cmssw_home"
 }
 JSON
 
