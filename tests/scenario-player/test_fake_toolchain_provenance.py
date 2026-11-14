@@ -201,7 +201,37 @@ def test_upload_does_not_read_the_metadata_txt_step4_writes(chain):
     assert "since" not in latest and "tag" not in latest
 
 
-@pytest.mark.parametrize("content, reason", [(b"not one of ours\n", "no provenance manifest"), (None, "no such file")])
+def test_upload_records_a_real_payload_by_its_job_directory(chain):
+    """A real harvest's .db (steps that ran CMSSW for real) has no manifest: the row names the calibration and run
+    of its job directory, says it's real, and has its size and checksum instead of lumisections."""
+    harvest = chain / "harvestJob_abc"
+    harvest.mkdir()
+    payload = fake_conddb.SQLITE_MAGIC + b"\x10\x00 a conditions payload"
+    (harvest / "NGTCalibEcalPedestals.db").write_bytes(payload)
+
+    result = _run("uploadConditions.py", ["NGTCalibEcalPedestals.db"], harvest)
+
+    (row,) = fake_conddb.read_ledger()
+    assert (row["calibration"], row["run"], row["payload"], row["lumisections"]) == ("EcalPedestals", 398600, "real", None)
+    assert row["payload_bytes"] == len(payload) and len(row["sha256"]) == 64
+    assert "a real payload" in result.stdout
+
+
+def test_edmfileutil_reads_a_file_through_either_prefix(chain):
+    raw = chain / "run398600_ls0051_some-real-name.root"
+    raw.write_bytes(b"(FAKE) raw data placeholder\n")
+    for url in (f"root://eoscms.cern.ch/{raw}", f"file:{raw}"):
+        assert _run("edmFileUtil", [url, "--eventsInLumi"], chain).stdout.split()[:2] == ["398600", "51"]
+
+
+@pytest.mark.parametrize(
+    "content, reason",
+    [
+        (b"not one of ours\n", "no provenance manifest"),
+        (b"", "the harvester wrote no payload"),
+        (None, "no such file"),
+    ],
+)
 def test_upload_records_nothing_for_a_db_it_cannot_read(chain, content, reason):
     """Not even an empty payload: HARVESTING.sh uploads after a failed cmsRun too, with no .db."""
     harvest = chain / "harvestJob000"

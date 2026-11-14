@@ -8,8 +8,11 @@ manifests or, for a raw file seed.py wrote, the LS in its run<RUN>_ls<LS> name. 
 travel the real data path, step2 -> step3 -> step4.
 
 The ledger, $NGT_DEV_HOME/conddb/payloads.jsonl, gets one JSON line per successful fake upload,
-numbered under a lock; a scenario's expect: block is checked against it.
+numbered under a lock; a scenario's expect: block is checked against it. A real harvest's .db, from
+steps that ran CMSSW for real, gets a row too, marked `"payload": "real"`: its lumisections aren't
+in it, so the row has none, and its size and sha256 instead.
 """
+import hashlib
 import json
 import os
 import re
@@ -19,6 +22,7 @@ from datetime import datetime, timezone
 import faults  # scenario-player/faults.py: on sys.path wherever this module is imported
 
 PROVENANCE_MAGIC = "(FAKE-NGT-PROVENANCE-v1)"
+SQLITE_MAGIC = b"SQLite format 3\x00"  # how every conditions .db CMSSW writes starts
 # How seed.py names the raw files (bin/edmFileUtil parses the same): run<RUN>_ls<LS>....root.
 RAW_LS_RE = re.compile(r"run(\d+)_ls(\d+)")
 CONDDB_DIR_NAME = "conddb"
@@ -72,6 +76,27 @@ def read_provenance(path):
             return json.load(f)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def real_payload(db_file):
+    """The ledger fields for a real harvest's .db, or None for anything else, an empty file included (a harvester
+    that found too little to write leaves one). The calibration and run are its job directory's."""
+    try:
+        with open(db_file, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    if not data.startswith(SQLITE_MAGIC):
+        return None
+    scope = faults.scope_from_cwd(os.path.dirname(os.path.abspath(db_file)))
+    return {
+        "calibration": scope.get("calibration"),
+        "run": _as_int(scope.get("run")),
+        "lumisections": None,
+        "payload": "real",
+        "payload_bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
 
 
 def lumisections_of_input(path):

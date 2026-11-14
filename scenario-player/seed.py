@@ -73,6 +73,36 @@ def _touch_ls_file(eos_dir, run_number, ls_number):
     return path
 
 
+def _stage_file(eos_dir, run_number, ls_number, source):
+    """A real file as one of the run's: a link to it, named so that bin/edmFileUtil reads the run and LS from it."""
+    source = Path(source).resolve()
+    path = eos_dir / f"run{run_number}_ls{ls_number:04d}_{source.name}"
+    if path.is_symlink() or path.exists():
+        path.unlink()
+    path.symlink_to(source)
+    return path
+
+
+def _deep_merge(base, changes):
+    for key, value in changes.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def apply_calibration_config(overrides):
+    """Merge a scenario's calibration_config: into the scratch calibrationYAML copies (maps merge, anything else
+    replaces), until the next reset copies the repo's again. The loops re-read them every cycle."""
+    for calibration, changes in overrides.items():
+        if calibration not in CALIBRATIONS or not isinstance(changes, dict):
+            raise ValueError(f"calibration_config: expected {list(CALIBRATIONS)} mapped to settings, got {calibration!r}")
+        path = CALIB_YAML_DIR / f"{calibration}.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        path.write_text(yaml.safe_dump(_deep_merge(data, changes), sort_keys=False), encoding="utf-8")
+
+
 def cmd_setup(_args):
     CALIB_YAML_DIR.mkdir(parents=True, exist_ok=True)
     for calib in CALIBRATIONS:
@@ -120,10 +150,10 @@ def seed_run(calibration, run, minutes_ago=2, ls=None):
     return eos_dir
 
 
-def add_ls(calibration, run, ls):
-    """Drop one more fake RAW LS file for an already-seeded run. Library form
-    of the `add-ls` CLI verb -- see cmd_add_ls. Raises ValueError if `run`
-    hasn't been seeded yet."""
+def add_ls(calibration, run, ls, source=None):
+    """Drop one more fake RAW LS file for an already-seeded run -- or, given `source`, a real file
+    standing for it. Library form of the `add-ls` CLI verb -- see cmd_add_ls. Raises ValueError if
+    `run` hasn't been seeded yet."""
     runs = _load_runs()
     if not any(r["run_number"] == run for r in runs):
         raise ValueError(f"No such run {run} in {OMS_RUNS_FILE} -- run seed-run first")
@@ -134,7 +164,7 @@ def add_ls(calibration, run, ls):
 
     eos_dir = _run_eos_dir(calibration, run)
     eos_dir.mkdir(parents=True, exist_ok=True)
-    return _touch_ls_file(eos_dir, run, ls)
+    return _stage_file(eos_dir, run, ls, source) if source else _touch_ls_file(eos_dir, run, ls)
 
 
 def end_run(run):
@@ -179,7 +209,7 @@ def cmd_seed_run(args):
 
 def cmd_add_ls(args):
     try:
-        path = add_ls(args.calibration, args.run, args.ls)
+        path = add_ls(args.calibration, args.run, args.ls, source=args.file)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         sys.exit(1)
@@ -244,6 +274,7 @@ def main():
     p_add.add_argument("--calibration", required=True, choices=CALIBRATIONS)
     p_add.add_argument("--run", required=True, type=int)
     p_add.add_argument("--ls", required=True, type=int)
+    p_add.add_argument("--file", help="a real file to stand for this LS (linked, not copied), instead of a placeholder")
     p_add.set_defaults(func=cmd_add_ls)
 
     p_end = sub.add_parser("end-run", help="Mark a run as ended in the fake OMS (sets end_time to now)")

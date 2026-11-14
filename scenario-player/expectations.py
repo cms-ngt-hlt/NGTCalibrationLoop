@@ -18,7 +18,9 @@
 
 `payloads:` is the expected sequence of uploads: every ledger row must be matched by an entry or
 allowed by `allow_extra`. The flags apply to the whole block; README.md's "Validating the result"
-says why each exists.
+says why each exists. An entry without `lumisections` matches its calibration and run whatever they
+cover: what a real payload, from steps that ran CMSSW for real, can be checked against, as its
+lumisections aren't recorded.
 """
 import re
 import time
@@ -102,7 +104,7 @@ def format_ls_set(lumisections):
 class PayloadExpectation:
     calibration: str
     run: int
-    lumisections: frozenset
+    lumisections: Optional[frozenset]  # None: whatever the upload covers
     index: int = 0  # position in the `payloads:` list, for `ordered`
 
     @property
@@ -110,10 +112,14 @@ class PayloadExpectation:
         return (self.calibration, self.run)
 
     def describe(self):
+        if self.lumisections is None:
+            return f"{self.calibration}/run{self.run} (any LS)"
         return f"{self.calibration}/run{self.run} LS {format_ls_set(self.lumisections)}"
 
     def compare(self, row) -> Tuple[set, set]:
         """(missing, extra) lumisections for one candidate ledger row."""
+        if self.lumisections is None:
+            return set(), set()
         actual = _row_ls(row)
         return set(self.lumisections) - actual, actual - set(self.lumisections)
 
@@ -175,10 +181,12 @@ def _parse_payload(entry_raw, index):
     run = entry_raw.pop("run", None)
     _require(_as_int(run) is not None, f"expect: {where} requires an integer 'run', got {run!r}")
 
-    try:
-        lumisections = parse_ls_spec(entry_raw.pop("lumisections", None))
-    except ValueError as exc:
-        raise ExpectationError(f"expect: {where} {exc}") from exc
+    lumisections = None
+    if "lumisections" in entry_raw:
+        try:
+            lumisections = frozenset(parse_ls_spec(entry_raw.pop("lumisections")))
+        except ValueError as exc:
+            raise ExpectationError(f"expect: {where} {exc}") from exc
 
     misplaced = sorted(set(entry_raw) & BLOCK_LEVEL_FLAGS)
     _require(
@@ -191,7 +199,7 @@ def _parse_payload(entry_raw, index):
     return PayloadExpectation(
         calibration=calibration,
         run=int(run),
-        lumisections=frozenset(lumisections),
+        lumisections=lumisections,
         index=index,
     )
 
@@ -251,11 +259,18 @@ def _row_ls(row):
     return set(row.get("lumisections") or [])
 
 
+def _is_real(row):
+    """A real harvest's payload (fake_conddb.real_payload): its lumisections aren't known."""
+    return row.get("payload") == "real"
+
+
 def _describe_row(row):
-    return (
-        f"seq {row.get('seq')}  {row.get('calibration')}/run{row.get('run')}  "
-        f"LS {format_ls_set(_row_ls(row))}"
+    covers = (
+        f"LS unknown (a real payload, {row.get('payload_bytes')} bytes)"
+        if _is_real(row)
+        else f"LS {format_ls_set(_row_ls(row))}"
     )
+    return f"seq {row.get('seq')}  {row.get('calibration')}/run{row.get('run')}  {covers}"
 
 
 def _group_rows(rows):
@@ -329,12 +344,13 @@ def _check_duplicates(key_rows, expectations, problems):
         return
     seen = {}
     for row in key_rows:
-        signature = frozenset(_row_ls(row))
+        # A real payload's lumisections aren't known: the same file twice is the duplicate.
+        signature = ("real", row.get("sha256")) if _is_real(row) else frozenset(_row_ls(row))
         if signature in seen:
+            what = "payload" if _is_real(row) else "lumisection set"
             problems.append(
-                f"duplicate upload: seq {row.get('seq')} repeats the lumisection set already uploaded at "
-                f"seq {seen[signature]} ({row.get('calibration')}/run{row.get('run')} "
-                f"LS {format_ls_set(signature)}) -- allow with allow_duplicates: true"
+                f"duplicate upload: seq {row.get('seq')} repeats the {what} already uploaded at "
+                f"seq {seen[signature]} ({_describe_row(row)}) -- allow with allow_duplicates: true"
             )
         else:
             seen[signature] = row.get("seq")
@@ -342,9 +358,10 @@ def _check_duplicates(key_rows, expectations, problems):
 
 def _check_empty_payloads(rows, problems):
     """A payload covering no lumisections fails whatever the flags: a harvest only runs when there
-    is something to harvest, so it means a broken upload, not an extra."""
+    is something to harvest, so it means a broken upload, not an extra. A real payload's aren't known,
+    and an empty real one is refused by the uploader itself."""
     for row in rows:
-        if not _row_ls(row):
+        if not _row_ls(row) and not _is_real(row):
             problems.append(
                 f"payload with no lumisections: {_describe_row(row)} -- a harvest only runs when "
                 "there is something to harvest, so either nothing of substance was uploaded or the "

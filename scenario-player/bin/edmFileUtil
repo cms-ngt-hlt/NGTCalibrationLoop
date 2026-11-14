@@ -16,13 +16,13 @@ import os
 import re
 import sys
 
-PREFIX = "root://eoscms.cern.ch/"
+PREFIXES = ("root://eoscms.cern.ch/", "file:")  # ngtParameters.jsn's INPUT_URL_PREFIX, either way
 
 
 def main():
     args = sys.argv[1:]
     url = args[0] if args else ""
-    path = url[len(PREFIX):] if url.startswith(PREFIX) else url
+    path = next((url[len(p):] for p in PREFIXES if url.startswith(p)), url)
 
     basename = os.path.basename(path)
     match = re.match(r"run(\d{6})_ls(\d+)", basename)

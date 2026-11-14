@@ -32,6 +32,13 @@ which is the physically sensible way to model "multiple calibrations
 processing concurrently" -- not two different run numbers overlapping in
 time. See scenario-player/scenarios/*.yaml for more worked examples.
 
+A lumisection can name a real file to stand for it, `{ls: 1246, after: 0, file: /path/to/raw.root}`:
+it is linked into the fake EOS directory under a name the fake edmFileUtil reads the run and LS
+from, for steps that run real CMSSW on it. A top-level `calibration_config:` map is merged into the
+scratch calibrationYAML copies when playback starts, until the next reset: e.g. a harvester's
+threshold lowered for a small real input. Scenarios like that, which need a real file and steps that
+run real CMSSW, live in scenario-player/scenarios/real-cmssw/.
+
 A top-level `faults:` list arms simulated OMS/cmsRun/upload_conditions.py failures on the
 same timeline: each entry is a faults.py fault plus `at`, seconds since playback start (see
 scenario-player/scenarios/fault_injection_demo.yaml).
@@ -172,12 +179,14 @@ class Event:
     ls: Optional[int] = None
     minutes_ago: float = 2.0
     fault: Optional[ngt_faults.FaultSpec] = None
+    source: Optional[str] = None  # add_ls: a real file standing for the LS
 
     def describe(self):
         if self.kind == "start_run":
             return f"seed-run --calibration {self.calibration} --run {self.run}"
         if self.kind == "add_ls":
-            return f"add-ls --calibration {self.calibration} --run {self.run} --ls {self.ls}"
+            file = f" --file {self.source}" if self.source else ""
+            return f"add-ls --calibration {self.calibration} --run {self.run} --ls {self.ls}{file}"
         if self.kind == "fault":
             return _describe_fault(self.fault)
         return f"end-run --run {self.run}"
@@ -186,7 +195,7 @@ class Event:
         if self.kind == "start_run":
             seed.seed_run(self.calibration, self.run, minutes_ago=self.minutes_ago, ls=[])
         elif self.kind == "add_ls":
-            seed.add_ls(self.calibration, self.run, self.ls)
+            seed.add_ls(self.calibration, self.run, self.ls, source=self.source)
         elif self.kind == "end_run":
             seed.end_run(self.run)
         elif self.kind == "fault":
@@ -221,6 +230,28 @@ def _check_no_overlapping_runs(scenario):
             )
 
 
+def _real_file(run, ls_spec):
+    """A lumisection's `file:`, a real file to stand for it ($VARS expanded), or None. Checked here, so a scenario
+    whose file isn't on this machine fails before anything is played."""
+    if ls_spec.get("file") is None:
+        return None
+    path = os.path.expandvars(os.path.expanduser(str(ls_spec["file"])))
+    if not os.path.isfile(path):
+        raise ValueError(f"run {run}: lumisection {ls_spec.get('ls')}'s file {path} doesn't exist here")
+    return path
+
+
+def calibration_config_of(scenario):
+    """The scenario's `calibration_config:`, {calibration: settings to merge into its calibrationYAML}, or {}."""
+    overrides = scenario.get("calibration_config") or {}
+    if not isinstance(overrides, dict) or not all(isinstance(v, dict) for v in overrides.values()):
+        raise ValueError("calibration_config: expected a map of calibration names to the settings to change")
+    unknown = sorted(set(overrides) - set(seed.CALIBRATIONS))
+    if unknown:
+        raise ValueError(f"calibration_config: unknown calibration(s) {unknown}; valid: {list(seed.CALIBRATIONS)}")
+    return overrides
+
+
 def build_timeline(scenario):
     """Turn a parsed scenario dict into a flat, time-sorted list of Events.
 
@@ -250,8 +281,9 @@ def build_timeline(scenario):
             events.append(Event(t, "start_run", calibration, run, minutes_ago=minutes_ago))
         for ls_spec in spec.get("lumisections", []):
             t += float(ls_spec.get("after", 0))
+            source = _real_file(run, ls_spec)
             for calibration in calibrations:
-                events.append(Event(t, "add_ls", calibration, run, ls=ls_spec["ls"]))
+                events.append(Event(t, "add_ls", calibration, run, ls=ls_spec["ls"], source=source))
         t += float(spec.get("end_after", 0))
         events.append(Event(t, "end_run", calibrations[0], run))
 
@@ -452,6 +484,7 @@ def main():
     # A malformed scenario exits 2, without a traceback; expectations that didn't hold exit 1.
     try:
         events = build_timeline(scenario)
+        calibration_config = calibration_config_of(scenario)
         raw_expect = scenario.get("expect") if isinstance(scenario, dict) else None
         expectations = (
             None if raw_expect is None or args.no_validate else ngt_expectations.parse_expectations(raw_expect)
@@ -479,8 +512,14 @@ def main():
 
     if args.dry_run:
         show_timeline(events)
+        if calibration_config:
+            _emit(f"calibration_config: {calibration_config}")
         _emit(expectations.describe() if expectations else "expect: (none -- scenario is not self-validating)")
         return None
+
+    if calibration_config:
+        seed.apply_calibration_config(calibration_config)
+        _emit(f"Changed {', '.join(sorted(calibration_config))}'s calibrationYAML for this play, until the next reset")
 
     # Only this play's uploads are checked: an earlier play's stay in the ledger until a reset.
     uploads_before = len(fake_conddb.read_ledger())

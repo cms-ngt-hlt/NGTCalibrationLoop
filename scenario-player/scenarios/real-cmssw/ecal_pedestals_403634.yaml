@@ -1,0 +1,24 @@
+# Run 403634's real TestEnablesEcalHcal RAW (LS 1246-1259) through real CMSSW: needs steps that run CMSSW and the file
+# in inputs/ next to $NGT_DEV_HOME. It has too few events for ECAL's pedestal harvester at its usual threshold.
+runs:
+  - calibrations: [EcalPedestals]
+    run: 403634
+    lumisections:
+      - {ls: 1246, after: 0, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0.root}
+    end_after: 60
+
+calibration_config:
+  EcalPedestals:
+    step_4_config:
+      cms_driver:
+        python_config_mods:
+          - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
+          - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
+
+# A real payload: its lumisections aren't recorded.
+expect:
+  settle_timeout: 1800
+  quiet_for: 60
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 403634}

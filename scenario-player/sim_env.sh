@@ -84,7 +84,8 @@ sim_setup() {
     "GLOBAL_TAG": "$NGT_SIM_GLOBAL_TAG",
     "DATA_BASE_PATH": "$NGT_DEV_HOME/data",
     "LOG_BASE_PATH": "$NGT_DEV_HOME/logs",
-    "COND_AUTH_PATH": "$NGT_DEV_HOME/cond_auth"
+    "COND_AUTH_PATH": "$NGT_DEV_HOME/cond_auth",
+    "INPUT_URL_PREFIX": "file:"
 }
 JSON
 

@@ -111,6 +111,37 @@ def test_parse_rejects_malformed_blocks(block):
         ngt_expectations.parse_expectations(block)
 
 
+# --- real payloads, whose lumisections aren't known ---------------------------
+
+
+def real_row(seq, sha="a" * 64, calibration=CAL, run=398600):
+    return {"seq": seq, "calibration": calibration, "run": run, "lumisections": None, "payload": "real",
+            "payload_bytes": 4096, "sha256": sha}
+
+
+def test_an_entry_without_lumisections_matches_its_run_whatever_it_covers():
+    any_ls = {"calibration": CAL, "run": 398600}
+    assert check({"payloads": [any_ls]}, [real_row(1)]).ok
+    assert check({"payloads": [any_ls]}, [row(1, [51, 52])]).ok
+    assert "(any LS)" in ngt_expectations.parse_expectations({"payloads": [any_ls]}).describe()
+
+
+def test_a_real_payload_is_not_an_empty_one_and_shows_as_such():
+    verdict = check({"payloads": [{"calibration": CAL, "run": 398600}]}, [real_row(1)])
+    assert verdict.ok, verdict.problems
+    assert "a real payload, 4096 bytes" in ngt_expectations.format_report(verdict)
+
+
+def test_an_entry_with_lumisections_cannot_be_satisfied_by_a_real_payload():
+    assert not check({"payloads": [one("51-53")]}, [real_row(1)]).ok
+
+
+def test_the_same_real_payload_twice_is_a_duplicate_and_two_different_ones_are_not():
+    expect = {"payloads": [{"calibration": CAL, "run": 398600}], "allow_extra": True}
+    assert not check(expect, [real_row(1), real_row(2)]).ok
+    assert check(expect, [real_row(1), real_row(2, sha="b" * 64)]).ok
+
+
 # --- the happy paths -----------------------------------------------------------
 
 

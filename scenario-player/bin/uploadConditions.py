@@ -30,28 +30,40 @@ def main():
     cond_auth_path = os.environ.get("COND_AUTH_PATH", "<unset>")
 
     # HARVESTING.sh still calls this after its cmsRun failed and left no .db (Step 4 runs it with
-    # `bash`, so its shebang's -e doesn't apply): fail like a real upload, record nothing.
+    # `bash`, so its shebang's -e doesn't apply): fail like a real upload, record nothing. The same
+    # for an empty .db, which a real harvester leaves when it found too little to write.
     manifest = fake_conddb.read_provenance(db_file)
-    if manifest is None:
-        reason = "no provenance manifest in it" if os.path.exists(db_file) else "no such file"
+    real = fake_conddb.real_payload(db_file) if manifest is None else None
+    if manifest is None and real is None:
+        if not os.path.exists(db_file):
+            reason = "no such file"
+        elif os.path.getsize(db_file) == 0:
+            reason = "it is empty: the harvester wrote no payload"
+        else:
+            reason = "no provenance manifest in it"
         print(f"(FAKE) uploadConditions.py: ERROR - cannot read {db_file}: {reason}", file=sys.stderr)
         sys.exit(1)
 
-    row = fake_conddb.append_payload(
-        {
+    if real is not None:
+        record = dict(real)
+    else:
+        record = {
             "calibration": manifest["calibration"],
             "run": manifest["run"],
             "lumisections": manifest["lumisections"],
             "n_input_files": len(manifest["inputs"]),
-            "db_file": os.path.basename(db_file),
-            "job_dir": os.getcwd(),
         }
-    )
+    row = fake_conddb.append_payload(dict(record, db_file=os.path.basename(db_file), job_dir=os.getcwd()))
 
     print(f"(FAKE) uploadConditions.py: would upload {db_file} using COND_AUTH_PATH={cond_auth_path}")
+    what = (
+        f"a real payload of {row['payload_bytes']} bytes"
+        if real is not None
+        else f"covering LS {','.join(map(str, row['lumisections'])) or 'none'}"
+    )
     print(
         f"(FAKE) uploadConditions.py: recorded payload seq={row['seq']} {row['calibration']}/run{row['run']} "
-        f"covering LS {','.join(map(str, row['lumisections'])) or 'none'} -> {fake_conddb.ledger_path()}"
+        f"{what} -> {fake_conddb.ledger_path()}"
     )
 
 

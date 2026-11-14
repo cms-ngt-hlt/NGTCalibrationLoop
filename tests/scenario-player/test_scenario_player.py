@@ -175,10 +175,86 @@ def test_play_fires_events_in_order_with_expected_arguments(monkeypatch):
 
     assert calls == [
         ("seed_run", ("EcalPedestals", 398600), {"minutes_ago": 3.0, "ls": []}),
-        ("add_ls", ("EcalPedestals", 398600, 51), {}),
-        ("add_ls", ("EcalPedestals", 398600, 52), {}),
+        ("add_ls", ("EcalPedestals", 398600, 51), {"source": None}),
+        ("add_ls", ("EcalPedestals", 398600, 52), {"source": None}),
         ("end_run", (398600,), {}),
     ]
+
+
+def test_a_lumisection_can_be_a_real_file_which_must_exist(monkeypatch, tmp_path):
+    calls = _record_seed_calls(monkeypatch)
+    monkeypatch.setattr(scenario_player.time, "sleep", lambda _seconds: None)
+    real = tmp_path / "370f0750.root"
+    real.write_bytes(b"real RAW, say")
+    monkeypatch.setenv("NGT_TEST_INPUTS", str(tmp_path))
+    spec = {"calibrations": ["EcalPedestals"], "run": 403634, "end_after": 1,
+            "lumisections": [{"ls": 1246, "after": 0, "file": "$NGT_TEST_INPUTS/370f0750.root"}]}
+
+    events = scenario_player.build_timeline({"runs": [spec]})
+    scenario_player.play(events, log=lambda _msg: None)
+
+    assert ("add_ls", ("EcalPedestals", 403634, 1246), {"source": str(real)}) in calls
+    assert "--file " + str(real) in next(e for e in events if e.kind == "add_ls").describe()
+    spec["lumisections"][0]["file"] = str(tmp_path / "not-here.root")
+    with pytest.raises(ValueError, match="doesn't exist here"):
+        scenario_player.build_timeline({"runs": [spec]})
+
+
+def test_staging_a_real_file_links_it_under_a_name_edmfileutil_reads(monkeypatch, tmp_path):
+    import seed  # scenario-player/seed.py, with its paths pointed at tmp_path
+
+    monkeypatch.setattr(seed, "OMS_RUNS_FILE", tmp_path / "oms_runs.json")
+    monkeypatch.setattr(seed, "_eos_dir", lambda calibration: tmp_path / "eos" / calibration)
+    real = tmp_path / "inputs" / "370f0750.root"
+    real.parent.mkdir()
+    real.write_bytes(b"real RAW, say")
+
+    seed.seed_run("EcalPedestals", 403634)
+    staged = seed.add_ls("EcalPedestals", 403634, 1246, source=real)
+
+    assert staged.name == "run403634_ls1246_370f0750.root" and staged.is_symlink()
+    assert staged.resolve() == real.resolve() and staged.read_bytes() == b"real RAW, say"
+    assert fake_conddb.lumisections_of_input(staged) == {1246}
+
+
+def test_calibration_config_merges_into_the_scratch_copy_until_a_reset(monkeypatch, tmp_path):
+    import seed
+
+    monkeypatch.setattr(seed, "CALIB_YAML_DIR", tmp_path)
+    (tmp_path / "EcalPedestals.yaml").write_text(
+        yaml.safe_dump({"step_4_config": {"timeoutSeconds": 900, "cms_driver": {"python_config_mods": ["a"]}}}),
+        encoding="utf-8",
+    )
+    overrides = scenario_player.calibration_config_of(
+        {"calibration_config": {"EcalPedestals": {"step_4_config": {"cms_driver": {"python_config_mods": ["a", "b"]}}}}}
+    )
+    seed.apply_calibration_config(overrides)
+
+    merged = yaml.safe_load((tmp_path / "EcalPedestals.yaml").read_text(encoding="utf-8"))
+    assert merged == {"step_4_config": {"timeoutSeconds": 900, "cms_driver": {"python_config_mods": ["a", "b"]}}}
+    for bad in ({"Nonsense": {}}, {"EcalPedestals": ["not", "a", "map"]}, ["a list"]):
+        with pytest.raises(ValueError, match="calibration_config"):
+            scenario_player.calibration_config_of({"calibration_config": bad})
+
+
+def test_real_cmssw_scenarios_are_complete_but_for_their_input_files(monkeypatch, tmp_path):
+    """scenarios/real-cmssw/ needs a real file and a deployment running CMSSW, so the other scenario tests skip it:
+    played here with a stand-in file."""
+    import expectations as ngt_expectations
+
+    stand_in = tmp_path / "stand-in.root"
+    stand_in.write_bytes(b"")
+    paths = sorted((SCENARIO_PLAYER_DIR / "scenarios" / "real-cmssw").glob("*.yaml"))
+    assert paths
+    for path in paths:
+        scenario = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for spec in scenario["runs"]:
+            for ls_spec in spec["lumisections"]:
+                assert ls_spec.get("file"), f"{path.name}: a real-CMSSW scenario plays real files"
+                ls_spec["file"] = str(stand_in)
+        assert scenario_player.build_timeline(scenario)
+        scenario_player.calibration_config_of(scenario)
+        assert ngt_expectations.parse_expectations(scenario["expect"]).payloads
 
 
 def test_play_fires_one_seed_run_and_add_ls_per_calibration_but_one_end_run(monkeypatch):

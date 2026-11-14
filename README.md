@@ -510,6 +510,30 @@ expect:
 
 `--no-validate` plays a scenario ignoring its block; `--dry-run` prints the block with the timeline.
 
+### Real files, real CMSSW
+
+A lumisection in a scenario can name a real file to stand for it: `{ls: 1246, after: 0, file: <path>}`
+(`$VARS` expanded, checked before anything plays). The file is linked into the fake EOS directory as
+`run<RUN>_ls<LS>_<its name>`, so the fake `edmFileUtil` still reads the run and LS off the name. The
+fake EOS is a directory, so `sim_env.sh` sets `ngtParameters.jsn`'s `INPUT_URL_PREFIX` to `file:`. Step
+2's job then reads the file directly rather than through `root://eoscms.cern.ch/`.
+
+A top-level `calibration_config:` is merged into `$NGT_DEV_HOME/calibrationYAML` when playback starts,
+until the next reset: maps merge, anything else replaces. A real run of the `EcalPedestals` steps uses
+it to lower the pedestal harvester's threshold for an input of a few lumisections.
+
+What processes the file depends on where the steps run, not on the scenario:
+- **With the fake toolchain,** the steps are fake as usual.
+- **In pods of a CMSSW image,** the steps are real: the multi-pod deployment with `values-step-pods.yaml` and a
+  cluster's CMSSW values.
+
+**The upload stays the fake one.** It records a real `.db` too, by its job directory, as
+`"payload": "real"` with its size and checksum: its lumisections aren't in it. It refuses an empty one,
+which a harvester leaves when it found too little.
+
+**Checking a real run:** an `expect:` entry without `lumisections` matches its calibration and run alone.
+Such scenarios live in `scenario-player/scenarios/real-cmssw/`, away from the ones every machine can play.
+
 Tests: `tests/scenario-player/test_fake_toolchain_provenance.py`, `test_fake_conddb.py` and
 `test_scenario_expectations.py`; `tests/fsm-loops/test_scenarios.py` checks the blocks of
 `basic_ecal_pedestals.yaml` and `fault_injection_demo.yaml` against the real loops.
