@@ -372,7 +372,7 @@ class NGTLoopStep2:
     def edmFileUtilCommand(self, filename):
         """Run edmFileUtil on a single EOS file and return the completed subprocess result."""
         # for now it only works with one file, rewrite to also give out for several files..!
-        cmd = ["edmFileUtil", "root://eoscms.cern.ch/" + filename, "--eventsInLumi"]
+        cmd = ["edmFileUtil", self.inputPrefix + filename, "--eventsInLumi"]
         output = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False
         )
@@ -430,7 +430,7 @@ class NGTLoopStep2:
         """
         logging.info(f"GetListOfAvailableFiles: using path {self.pathWhereFilesAppear}")
 
-        prefix = "root://eoscms.cern.ch/"
+        prefix = self.inputPrefix
 
         if not self.pathWhereFilesAppear:
             logging.critical("pathWhereFilesAppear is not set. Cannot list files.")
@@ -522,7 +522,7 @@ class NGTLoopStep2:
             self.setOfExpressLS = self.setOfLSToProcess
 
         # Extract all LS numbers (as integers)
-        str_paths = {"root://eoscms.cern.ch/" + str(p) for p in self.setOfExpressLS}
+        str_paths = {self.inputPrefix + str(p) for p in self.setOfExpressLS}
 
         ls_numbers = set()  # use a set to avoid duplicates
 
@@ -567,9 +567,7 @@ class NGTLoopStep2:
         outputFileName = f"run{self.runNumber}_{affix}{output_affix}.root"
         python_filename = f"run{self.runNumber}_{affix}{output_affix}.py"
         witness_file = f"run{self.runNumber}_{affix}{output_affix}_job.txt"
-        str_paths = ",".join(
-            "root://eoscms.cern.ch/" + str(p) for p in self.setOfExpressLS
-        )
+        str_paths = ",".join(self.inputPrefix + str(p) for p in self.setOfExpressLS)
 
         # Here we should have some logic that prepares the Express jobs
         # Probably should have a call to cmsDriver
@@ -737,6 +735,8 @@ rm {self.tempScriptName}
         self.scramArch = config["SCRAM_ARCH"]
         self.cmsswVersion = config["CMSSW_VERSION"]
         self.globalTag = config["GLOBAL_TAG"]
+        # What goes before an input file's path: EOS through xrootd, or `file:` for a local one.
+        self.inputPrefix = config.get("INPUT_URL_PREFIX", "root://eoscms.cern.ch/")
         self.dataBasePath = config.get("DATA_BASE_PATH", "/data/ngt")
 
         self.setOfLSObserved = set()
@@ -778,6 +778,7 @@ rm {self.tempScriptName}
         self.scramArch = ""
         self.cmsswVersion = ""
         self.globalTag = ""
+        self.inputPrefix = ""
         self.setOfLSObserved = set()
         self.setOfLSToProcess = set()
         self.setOfExpressLS = set()

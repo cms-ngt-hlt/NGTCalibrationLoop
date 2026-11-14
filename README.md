@@ -205,10 +205,11 @@ Three more keys, none of them in the production file:
 - `UPLOAD_COMMAND`: the uploader step 4 runs, by default `uploadConditions.py` from `PATH`. The
   scenario player gives its fake's absolute path: after a real release's `cmsenv`, `PATH` finds the
   release's own first.
-- `INPUT_URL_PREFIX`, for the library (`ngt_calibration_loop/`): what goes before an input file's
-  path, by default `root://eoscms.cern.ch/`.
-- `CMSSW_AREA`, for the library: the directory of the one release area every step's jobs `cmsenv`
-  in, made beforehand. Without it, each step 2 job makes one in its run's directory.
+- `INPUT_URL_PREFIX`: what goes before an input file's path, by default `root://eoscms.cern.ch/`;
+  `file:` for a local one.
+- `CMSSW_AREA`, for the library (`ngt_calibration_loop/`): the directory of the one release area
+  every step's jobs `cmsenv` in, made beforehand. Without it, each step 2 job makes one in its run's
+  directory.
 
 To set up a local environment and run the test suite:
 ```bash

@@ -4,12 +4,15 @@ discovery against EOS, the maxLatchTime/RunEnded escape hatches, and the express
 job prep/launch/cleanup cycle. All external services are mocked -- see conftest.py.
 """
 
+import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import omsapi
 import pytest
 import requests
+from support.fake_subprocess import FakeEOS, make_fake_run
 
 import NGTLoopStep2
 
@@ -278,6 +281,27 @@ def test_prepare_and_launch_express_job_full_cycle(loop, fake_eos, popen_calls):
 
     loop.ContinueAfterCleanup()
     assert loop.state == "WaitingForLS"  # not the final batch, run keeps going
+
+
+def test_input_files_are_read_through_the_configured_prefix(isolated_env, monkeypatch):
+    """EOS through xrootd by default; ngtParameters.jsn's INPUT_URL_PREFIX `file:` reads a local or mounted file,
+    as the library's step 2 does."""
+    params = json.loads(isolated_env.parameters_path.read_text(encoding="utf-8"))
+    isolated_env.parameters_path.write_text(json.dumps(dict(params, INPUT_URL_PREFIX="file:")), encoding="utf-8")
+    eos_files = FakeEOS()
+    monkeypatch.setattr(subprocess, "run", make_fake_run(eos_files, prefix="file:"))
+    loop = NGTLoopStep2.NGTLoopStep2("Step2Test", CALIBRATION)
+    _latch_live_run(loop, 398600)
+    raw = f"{loop.pathWhereFilesAppear}/run398600_ls0051.root"
+    eos_files.add_file(raw, run_number=398600, ls_numbers=[51])
+
+    loop.TryProcessLS()
+    loop.ContinueAfterCheckLS()
+    loop.TryPrepareExpressJobs()
+
+    script = (Path(loop.workingDir) / loop.tempScriptName).read_text(encoding="utf-8")
+    assert f"--filein file:{raw} " in script and "root://" not in script
+    assert "run398600_LS0051To0051_ecalPedsStep2.root" in script  # edmFileUtil read it through file:
 
 
 def test_max_files_per_job_batches_one_at_a_time(loop, fake_eos):
