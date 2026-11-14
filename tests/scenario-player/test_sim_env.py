@@ -5,6 +5,7 @@ tests/scenario-player/test_fake_toolchain_isolation.py these spawn a real bash, 
 shell sees after sourcing it.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -56,6 +57,16 @@ def test_env_sh_runs_the_fakes_from_the_checkout(env_sh):
     found = _sourced(env_sh, "command -v cmsRun")
     assert Path(found).resolve() == (REPO_ROOT / "scenario-player" / "bin" / "cmsRun").resolve()
     assert not (env_sh / "bin").exists()
+
+
+def test_the_parameters_name_the_fake_upload_by_path_and_one_release_area(env_sh):
+    """By path, so that a step cmsenv'd in a real release, whose own uploader PATH then finds first, still uploads to
+    the dummy conditions DB."""
+    params = json.loads((env_sh / "ngtParameters.jsn").read_text(encoding="utf-8"))
+    assert Path(params["UPLOAD_COMMAND"]).resolve() == (REPO_ROOT / "scenario-player" / "bin" / "uploadConditions.py").resolve()
+    assert params["CMSSW_AREA"] == str(env_sh / "cmssw_home")
+    assert (env_sh / "cmssw_home" / params["CMSSW_VERSION"] / "src").is_dir()
+    assert params["INPUT_URL_PREFIX"] == "file:"
 
 
 def test_env_sh_wires_up_fault_injection(env_sh):

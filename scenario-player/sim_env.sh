@@ -86,7 +86,8 @@ sim_setup() {
     "LOG_BASE_PATH": "$NGT_DEV_HOME/logs",
     "COND_AUTH_PATH": "$NGT_DEV_HOME/cond_auth",
     "INPUT_URL_PREFIX": "file:",
-    "CMSSW_AREA": "$NGT_DEV_HOME/cmssw_home"
+    "CMSSW_AREA": "$NGT_DEV_HOME/cmssw_home",
+    "UPLOAD_COMMAND": "$REPO_DIR/scenario-player/bin/uploadConditions.py"
 }
 JSON
 
