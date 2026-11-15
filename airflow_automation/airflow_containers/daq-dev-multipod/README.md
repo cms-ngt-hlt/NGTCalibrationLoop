@@ -148,6 +148,8 @@ fake `uploadConditions.py`, which records the real payload and sends it nowhere.
 > - **The run:** steps 2, 3 and 4's harvest took 217, 197 and 49 s in their pods, each at its first try, all on one of
 >   the three nodes. The upload recorded a real payload of 2,338,816 bytes: tag `EcalPedestals_NGTDemonstrator`, one
 >   IOV since 403634. From the run's start to `PASSED`, 9 minutes.
+> - **Again on 3.3.1-6,** after an upgrade: `PASSED`, with the step pods at 4 CPUs as fast as at 8. Step 3 now deletes
+>   its 600 MB `EcalTestPulsesRaw.root`, as its `cleanup_command` says.
 > - **The install:** the six pods came up with no restarts, Postgres on a worker and the other five on one `rubu` node.
 >   They had none after the play either.
 > - **The policy report:** one failure that step 3 doesn't list, the scheduler's API token. The step pods have three of
@@ -162,7 +164,7 @@ placeholder files, so the player refuses them.
 ```bash
 export NS=ngt-sakura-airflow-cmssw
 kubectl create namespace $NS
-# Step 1's Secret, in this namespace. values.yaml's image, 3.3.1-6, has the step pods and step 3's cleanup. Then:
+# Step 1's Secret, in this namespace. values.yaml's image is 3.3.1-8, with everything below. Then:
 helm install ngt airflow_automation/airflow_containers/multipod-helm -n $NS \
   -f airflow_automation/airflow_containers/daq-dev-multipod/values.yaml \
   -f airflow_automation/airflow_containers/multipod-helm/values-step-pods.yaml \
@@ -190,6 +192,24 @@ kubectl -n $NS get pods -l app=ngt-airflow-step -w
 
 Expect about 10 minutes, a real payload of about 2.3 MB in the ledger, and `expectations: PASSED`. Step pods that succeed
 are deleted.
+
+**One file per lumisection,** as a run makes them: the same run as 14 files of about 290 MB, one every 23 s.
+`ecal_pedestals_403634_by_lumi.yaml` plays all 14, and `ecal_pedestals_403634_by_lumi_short.yaml` the first 4. Upload
+them under their own names, 90 minutes for all 14 here, and not during a `helm upgrade`, which replaces the tools pod
+they go through:
+
+```bash
+for f in ../example-data/by-lumi/*.root; do
+  NS=$NS airflow_automation/airflow_containers/daq-dev-multipod/upload_input.sh "$f"
+done
+```
+
+Play them as above, with a reset between plays (step 5): they're all run 403634. Each file gets its own steps, as many
+at once as the scheduler runs tasks, and one harvest at a time over what Step 3 has made so far. The run's calibration
+events reach different crystals in different lumisections, and no EB crystal in the first four. So the 14 files' early
+harvests write no payload, and the last ones do, over all 14. The short one sets the harvester's threshold to -1, for a
+payload whatever the statistics: expect `PASSED` about 9 minutes after the run starts, the payload uploaded once per
+later harvest.
 
 **The step pods' policies:** while each exists, Kyverno fails three policies on it. `disallow-host-path` and
 `limit-hostpath-vols` are for the release's `hostPath`, and `prevent-bare-pods` is because KubernetesPodOperator starts
@@ -219,7 +239,11 @@ need an exception for the scheduler from the sysadmins.
 | A step pod stays `Pending`: `didn't match Pod's node affinity` or `Insufficient cpu` | The three nodes with the el8 install are busy, or their names changed | `kubectl -n $NS describe pod -l app=ngt-airflow-step`; the node list is in `values-cmssw.yaml` |
 | A step pod's events: `hostPath type check failed: /opt/offline-el8` | That node has no el8 install | Take it out of `values-cmssw.yaml`'s list |
 | A step task fails with `JobScriptFailedError` | `cmsRun` failed | Its log is in the run's directory: `kubectl -n $NS exec deploy/ngt-airflow-tools -- sh -c 'tail -50 $NGT_DEV_HOME/data/*/run*/*.log'` |
-| The upload refuses an empty payload | The harvester saw too few channels: one file fills 16.5% of EB's | The scenario lowers `threshChannelsAnalyzed` to 0.1. A smaller input needs it lower |
+| The upload refuses an empty payload | The harvester saw too few channels: the whole run fills 16.5% of EB's, its first 4 lumisections none | The scenarios lower `threshChannelsAnalyzed`: 0.1 for the whole run, -1 for a part of it |
+| A step task fails at once: `admission webhook ... denied the request: resource exceeds GlobalResourceQuota` | The tenant's CPU, all its namespaces' together, is taken | It's retried after 2 minutes. If it keeps happening: fewer CPUs per step pod in `values-cmssw.yaml`, or what the tenant's other namespaces hold (`kubectl describe resourcequota`) |
+| Step tasks stay `running` after their pods finished, and the scheduler restarted, `OOMKilled` | Too little memory: each step task follows its pod from in there | `values-step-pods.yaml` gives it 3Gi. The dead tasks fail after 5 minutes, and their retries find the work done and skip the file's later steps: reset and play again |
+| A file of the run never gets a DAG run | The process DAG was at `max_active_runs`: Airflow then drops the events that come meanwhile | The images since 3.3.1-8 set it to 1000 |
+| `upload_input.sh`: `command terminated with exit code 137` | A `helm upgrade` replaced the tools pod under the upload | Run it again: it resumes |
 | `play` exits 2: `can't play here: it needs cmssw fake, and this deployment's is real` | A scenario for the fakes: real `cmsRun` would fail on its placeholder files | Play it in an instance without `values-cmssw.yaml` |
 
 If NetApp's NFS stops working out, the shared volumes can be Longhorn's too. Its volumes are `ReadWriteOnce`, so the five
