@@ -7,6 +7,7 @@ AssetWatcher design does (airflow_dags/_process_tasks.py): process exactly the
 Step 2 output file(s) the task was triggered for, with no directory scan.
 """
 
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +15,7 @@ import pytest
 import yaml
 
 from ngt_calibration_loop import shell, step3
+from support import stand_in_cmssw
 
 CALIBRATION = "EcalPedestals"
 ROOT_SUFFIX = "ecalPedsStep2.root"
@@ -216,3 +218,39 @@ def test_run_alca_prompt_job_raises_on_failure_for_airflow_retry(isolated_env, j
     job_runner.queue_failure()
     with pytest.raises(shell.JobScriptFailedError):
         step3.run_alca_prompt_job(job_spec)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs ALCAOUTPUT.sh with bash")
+@pytest.mark.parametrize(
+    "cms_run, cleanup_command, succeeds, left",
+    [
+        ("touch EcalTestPulsesRaw.root", None, True, False),
+        (f"touch EcalTestPulsesRaw.root; {stand_in_cmssw.FAILS}", None, False, True),
+        ("touch EcalTestPulsesRaw.root", "false", True, True),
+    ],
+    ids=["after-a-success", "not-after-a-failure", "its-failure-only-logged"],
+)
+def test_the_job_runs_its_calibrations_cleanup_command(
+    isolated_env, tmp_path, monkeypatch, cms_run, cleanup_command, succeeds, left
+):
+    """ALCAOUTPUT.sh, run with bash under a stand-in CMSSW. EcalPedestals' cleanup_command deletes the 600 MB
+    EcalTestPulsesRaw.root its job leaves, which nothing reads: no code used to run it."""
+    stand_in_cmssw.install(tmp_path / "bin", monkeypatch, cms_run)
+    if cleanup_command is not None:
+        path = isolated_env.calib_yaml_dir / f"{CALIBRATION}.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data["step_3_config"]["cms_driver"]["cleanup_command"] = cleanup_command
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    run_dir = _run_dir(isolated_env, 398600)
+    (run_dir / "CMSSW_16_0_7_patch1" / "src").mkdir(parents=True)  # no CMSSW_AREA: the run's own
+    ctx = step3.build_run_context(CALIBRATION, "398600")
+    job_spec = step3.prepare_alca_prompt_job(ctx, {_seed_step2_root_file(run_dir, "run398600_LS0051To0051")})
+
+    if succeeds:
+        step3.run_alca_prompt_job(job_spec)
+    else:
+        with pytest.raises(shell.JobScriptFailedError):
+            step3.run_alca_prompt_job(job_spec)
+    assert (job_spec.job_dir / "EcalTestPulsesRaw.root").exists() == left
+    log = (job_spec.job_dir / "run398600_ecalPedsALCAOUTPUT.log").read_text(encoding="utf-8")
+    assert ("cleanup_command failed" in log) == (cleanup_command == "false")

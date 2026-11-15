@@ -101,7 +101,8 @@ def _job_dir_name(input_files):
 def prepare_alca_prompt_job(ctx: RunContext, files_to_process) -> Optional[JobSpec]:
     """Validate pending files still exist (a witness file can appear before its
     root file is fully flushed) and, if any survive, write the ALCAOUTPUT.sh
-    cmsDriver script. Returns None if nothing to process."""
+    cmsDriver script, which on success deletes its inputs and runs the
+    calibration's cleanup_command. Returns None if nothing to process."""
     input_files = {f for f in files_to_process if Path(f).exists()}
     if not input_files:
         return None
@@ -125,6 +126,11 @@ def prepare_alca_prompt_job(ctx: RunContext, files_to_process) -> Optional[JobSp
     rm_express_files = "\n".join(f"  rm {p}\n  rm -f {lineage.path_of(p)}" for p in input_files)
     # Read now: the job deletes its inputs, their lineage with them.
     lumisections = lineage.lumisections_of(input_files)
+    # What the job leaves that nothing reads, such as EcalPedestals' 600 MB EcalTestPulsesRaw.root. A failure there
+    # only goes in the log: by then the job's inputs are gone, so failing it would leave nothing to retry with.
+    cleanup = conf.get("cleanup_command", "").strip()
+    if cleanup:
+        cleanup = f"  {{\n{cleanup}\n  }} || echo 'cleanup_command failed' >> {log_filename}"
 
     ngt_params = ctx.ngt_params
     area = config.release_area(ngt_params) or ctx.working_dir  # without one, the area Step 2 made in the run's directory
@@ -148,6 +154,7 @@ if cmsRun {python_filename} > {log_filename} 2>&1; then
   touch {witness_file}
   # Step 3 succeeded, now deleting Step 2 input files
 {rm_express_files}
+{cleanup}
 else
   echo 'cmsRun failed' >> {log_filename}
   exit 1
