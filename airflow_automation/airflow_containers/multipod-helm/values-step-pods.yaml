@@ -13,9 +13,9 @@ airflow:
   scheduler:
     annotations:
       ngt-airflow/step-pods: "true"
-    # A task that starts a step's pod and follows its log takes more memory than a fake's PythonOperator: four at once
-    # took the scheduler past values.yaml's 1Gi (OOMKilled, 2026-11-15), and parallelism lets eight run. Merged into
-    # values.yaml's, so the CPU stays.
+    # A task that starts a step's pod and follows its log takes more memory than a fake's PythonOperator: about 160Mi
+    # each, over the scheduler's own 310Mi. Four at once took it past values.yaml's 1Gi (OOMKilled, 2026-11-15), and
+    # parallelism lets eight run. Merged into values.yaml's, so the CPU stays.
     resources:
       requests: {memory: 1280Mi}
       limits: {memory: 3Gi}
