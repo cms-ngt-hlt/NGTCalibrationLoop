@@ -1,0 +1,40 @@
+# Run 403634's real TestEnablesEcalHcal RAW as one file per lumisection (1246-1259), one every 23 s as the run made
+# them, through real CMSSW: needs steps that run CMSSW and the files in inputs/ next to $NGT_DEV_HOME.
+dependencies: {cmssw: real}
+runs:
+  - calibrations: [EcalPedestals]
+    run: 403634
+    lumisections:
+      - {ls: 1246, after: 0, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1246.root}
+      - {ls: 1247, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1247.root}
+      - {ls: 1248, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1248.root}
+      - {ls: 1249, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1249.root}
+      - {ls: 1250, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1250.root}
+      - {ls: 1251, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1251.root}
+      - {ls: 1252, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1252.root}
+      - {ls: 1253, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1253.root}
+      - {ls: 1254, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1254.root}
+      - {ls: 1255, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1255.root}
+      - {ls: 1256, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1256.root}
+      - {ls: 1257, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1257.root}
+      - {ls: 1258, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1258.root}
+      - {ls: 1259, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1259.root}
+    end_after: 60
+
+calibration_config:
+  EcalPedestals:
+    step_4_config:
+      cms_driver:
+        python_config_mods:
+          - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
+          - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
+
+# Every file's harvest writes a payload: the events reach the same 16.5% of EB's crystals from the first lumisection on,
+# above the lowered threshold. The last covers all 14. A long quiet_for, as uploads keep coming for minutes.
+expect:
+  settle_timeout: 2400
+  quiet_for: 180
+  allow_duplicates: true
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 403634, lumisections: 1246-1259}

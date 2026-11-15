@@ -1,0 +1,29 @@
+# The first 4 of ecal_pedestals_403634_by_lumi.yaml's files (LS 1246-1249), one every 23 s, through real CMSSW: the
+# same chain, for a quicker check.
+dependencies: {cmssw: real}
+runs:
+  - calibrations: [EcalPedestals]
+    run: 403634
+    lumisections:
+      - {ls: 1246, after: 0, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1246.root}
+      - {ls: 1247, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1247.root}
+      - {ls: 1248, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1248.root}
+      - {ls: 1249, after: 23, file: $NGT_DEV_HOME/../inputs/370f0750-b4e9-4d43-a0f5-920069a891e0_run403634_LS1249.root}
+    end_after: 60
+
+calibration_config:
+  EcalPedestals:
+    step_4_config:
+      cms_driver:
+        python_config_mods:
+          - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
+          - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
+
+# Every file's harvest writes a payload (see ecal_pedestals_403634_by_lumi.yaml); the last covers all 4.
+expect:
+  settle_timeout: 1200
+  quiet_for: 120
+  allow_duplicates: true
+  allow_extra: {before: true, after: true}
+  payloads:
+    - {calibration: EcalPedestals, run: 403634, lumisections: 1246-1249}
