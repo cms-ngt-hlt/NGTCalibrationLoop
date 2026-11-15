@@ -13,6 +13,12 @@ airflow:
   scheduler:
     annotations:
       ngt-airflow/step-pods: "true"
+    # A task that starts a step's pod and follows its log takes more memory than a fake's PythonOperator: four at once
+    # took the scheduler past values.yaml's 1Gi (OOMKilled, 2026-11-15), and parallelism lets eight run. Merged into
+    # values.yaml's, so the CPU stays.
+    resources:
+      requests: {memory: 1280Mi}
+      limits: {memory: 3Gi}
   # The pod template, for every component that reads the DAG files: the dag-processor builds the DAGs from them, the
   # scheduler runs their tasks.
   extraEnv: |
