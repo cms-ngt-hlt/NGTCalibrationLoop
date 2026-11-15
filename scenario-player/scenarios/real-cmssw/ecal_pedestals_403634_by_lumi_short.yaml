@@ -17,9 +17,11 @@ calibration_config:
       cms_driver:
         python_config_mods:
           - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
-          - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
+          - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = -1'
 
-# Every file's harvest writes a payload (see ecal_pedestals_403634_by_lumi.yaml); the last covers all 4.
+# -1: a payload whatever share of the crystals has enough entries. The first 4 lumisections' calibration events reach
+# no EB crystal, so any other threshold leaves none; channels without enough keep their old pedestals. The last
+# harvest covers all 4.
 expect:
   settle_timeout: 1200
   quiet_for: 120

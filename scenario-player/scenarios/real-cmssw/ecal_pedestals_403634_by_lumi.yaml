@@ -29,8 +29,9 @@ calibration_config:
           - 'process.PoolDBOutputService.toPut[0].tag = cms.string("EcalPedestals_NGTDemonstrator")'
           - 'process.ECALpedestalPCLHarvester.threshChannelsAnalyzed = 0.1'
 
-# Every file's harvest writes a payload: the events reach the same 16.5% of EB's crystals from the first lumisection on,
-# above the lowered threshold. The last covers all 14. A long quiet_for, as uploads keep coming for minutes.
+# The calibration events reach different crystals in different lumisections, and none in EB in the first four, so the
+# early harvests write no payload. The last, over all 14, reaches 16.5% of EB as the whole file does, above the lowered
+# threshold. A long quiet_for, as harvests keep coming for minutes.
 expect:
   settle_timeout: 2400
   quiet_for: 180
