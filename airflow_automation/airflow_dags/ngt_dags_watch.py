@@ -166,9 +166,11 @@ def _run_and_file(dag_run, triggering_asset_events):
     return pp.run_and_file_from_context({"dag_run": dag_run, "triggering_asset_events": triggering_asset_events})
 
 
-def _step_task(calibration, task_id, make_callable):
+def _step_task(calibration, task_id, make_callable, **kwargs):
     if STEP_POD_TEMPLATE is None:
-        return PythonOperator(task_id=task_id, python_callable=make_callable(calibration), **pp.LAUNCH_RETRY_KWARGS)
+        return PythonOperator(
+            task_id=task_id, python_callable=make_callable(calibration), **pp.LAUNCH_RETRY_KWARGS, **kwargs
+        )
 
     # Only where pods are wanted: elsewhere the image needn't have Airflow's Kubernetes provider.
     from airflow.providers.cncf.kubernetes.operators.pod import (  # pylint: disable=import-outside-toplevel
@@ -195,6 +197,7 @@ def _step_task(calibration, task_id, make_callable):
         on_finish_action="delete_succeeded_pod",  # a failed one stays, to look at
         startup_timeout_seconds=600,  # a first pull of a CMSSW image, or a node to free up
         **pp.LAUNCH_RETRY_KWARGS,
+        **kwargs,
     )
 
 
@@ -213,7 +216,12 @@ def _build_process_dag(calibration):
     ) as dag:
         step2_express = _step_task(calibration, "step2_express", pp.make_step2_express_callable)
         step3_alca = _step_task(calibration, "step3_alca", pp.make_step3_alca_callable)
-        step4_harvest = _step_task(calibration, "step4_harvest", pp.make_step4_harvest_callable)
+        # One harvest at a time per calibration: two that see the same Step 3 outputs share a job directory (step4.py
+        # names it after them), and at once they'd write the same payload file. One file per lumisection ends several
+        # Step 3s within seconds of each other (daq-dev, 2026-11-15).
+        step4_harvest = _step_task(
+            calibration, "step4_harvest", pp.make_step4_harvest_callable, max_active_tis_per_dag=1
+        )
         # The fake conditions DB is the Airflow image's, and a real upload goes nowhere from a cluster: in the worker.
         step4_upload = PythonOperator(
             task_id="step4_upload", python_callable=pp.make_step4_upload_callable(calibration), **pp.UPLOAD_RETRY_KWARGS

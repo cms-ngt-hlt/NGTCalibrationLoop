@@ -179,6 +179,8 @@ def test_process_dags_watch_their_per_calibration_file_asset(dagbag):
         # retry policy comes from _process_tasks.LAUNCH_RETRY_KWARGS/UPLOAD_RETRY_KWARGS
         assert dag.get_task("step2_express").retries == 3
         assert dag.get_task("step4_upload").retries == 5
+        # Harvests of the same Step 3 outputs share a job directory: never two at once.
+        assert dag.get_task("step4_harvest").max_active_tis_per_dag == 1
 
 
 def test_no_cron_dag_in_this_design(dagbag):
@@ -430,6 +432,7 @@ def test_steps_run_in_pods_from_the_template_when_the_deployment_gives_one(monke
     assert "ngt_run_and_file" in step2.arguments[4] and "ngt_run_and_file" in step2.arguments[6]
     assert list(step2.skip_on_exit_code) == [99]
     assert step2.retries == pp.LAUNCH_RETRY_KWARGS["retries"]
+    assert dag.get_task("step4_harvest").max_active_tis_per_dag == 1
 
 
 # --- thin chain smoke test through the shared _process_tasks callables ------
