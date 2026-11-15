@@ -25,7 +25,7 @@ airflow:
     airflow:
       # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch. The same image and tag as ../daq-dev/.
       repository: harbor.cms/ngt-sakura/ngt-airflow
-      tag: 3.3.1-7
+      tag: 3.3.1-8
   # Only needed if the Harbor project is private: see ../daq-dev/README.md. A missing Secret only costs a warning.
   imagePullSecrets:
     - harbor-ngt-sakura

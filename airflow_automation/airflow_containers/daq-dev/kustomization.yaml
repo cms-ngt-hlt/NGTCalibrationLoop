@@ -11,7 +11,7 @@ images:
   # The Tenant only lets pods pull from harbor.cms and gitlab-registry.cern.ch.
   - name: ngt-airflow
     newName: harbor.cms/ngt-sakura/ngt-airflow  # the tenant's Harbor project: see README.md
-    newTag: 3.3.1-7  # Airflow's version, then our build's: a new build needs a new tag
+    newTag: 3.3.1-8  # Airflow's version, then our build's: a new build needs a new tag
   # Harbor's cache of registry.cern.ch, which keeps Docker Hub's images under docker.io/.
   - name: postgres
     newName: harbor.cms/it-registry-proxy/docker.io/library/postgres

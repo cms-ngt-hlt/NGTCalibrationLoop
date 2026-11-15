@@ -84,13 +84,13 @@ through Keycloak. A robot account with push permission works too.
 From the root of your checkout:
 
 ```bash
-docker build -f airflow_automation/airflow_containers/Dockerfile -t ngt-airflow:3.3.1-7 .
-docker save ngt-airflow:3.3.1-7 -o ngt-airflow.tar
+docker build -f airflow_automation/airflow_containers/Dockerfile -t ngt-airflow:3.3.1-8 .
+docker save ngt-airflow:3.3.1-8 -o ngt-airflow.tar
 
 export HTTPS_PROXY=socks5://localhost:1080 SSL_CERT_FILE=$PWD/cms-puppet-ca.pem
 crane auth login harbor.cms -u <your Harbor username> --password-stdin    # paste the CLI secret, then Ctrl-D
-crane push ngt-airflow.tar harbor.cms/ngt-sakura/ngt-airflow:3.3.1-7
-crane ls harbor.cms/ngt-sakura/ngt-airflow                                 # 3.3.1-7
+crane push ngt-airflow.tar harbor.cms/ngt-sakura/ngt-airflow:3.3.1-8
+crane ls harbor.cms/ngt-sakura/ngt-airflow                                 # 3.3.1-8
 unset HTTPS_PROXY SSL_CERT_FILE
 ```
 
@@ -99,7 +99,7 @@ receives for known vulnerabilities, and Airflow's images tend to have some. The 
 stops it being pulled. The image takes the fixes released by the time it's built; `docker build --no-cache` gets the
 ones released since.
 
-**Each new build needs a new tag**: `3.3.1-8`, and so on, also as `newTag` in `kustomization.yaml`. The cluster keeps
+**Each new build needs a new tag**: `3.3.1-9`, and so on, also as `newTag` in `kustomization.yaml`. The cluster keeps
 the images it has pulled, and won't fetch a tag again that it already has.
 
 ## 4. Create the namespace and deploy
