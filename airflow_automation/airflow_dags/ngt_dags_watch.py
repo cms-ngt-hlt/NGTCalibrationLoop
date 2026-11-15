@@ -61,6 +61,8 @@ from ngt_calibration_loop import run_step, step2
 CALIBRATIONS = pp.CALIBRATIONS
 
 RUN_PRIMER_DAG_ID = "ngt_watch_run_primer"
+# More than a run's files ever in flight at once (see _build_process_dag).
+PROCESS_MAX_ACTIVE_RUNS = 1000
 
 # Env-overridable poll/grace knobs (airflow_automation/airflow_demo/airflow_demo.sh
 # sets short values for the live-test setup).
@@ -209,7 +211,10 @@ def _build_process_dag(calibration):
         schedule=[FILE_ASSETS[calibration]],
         start_date=pp.DAG_START_DATE,
         catchup=False,
-        max_active_runs=10,
+        # Never at its limit: there, a DAG woken by an Asset waits, and Airflow then makes one run for the events up to
+        # its queue entry and drops those that came meanwhile (3.3.1; daq-dev, 2026-11-15: the last 3 of 14 files).
+        # The scheduler's parallelism and max_active_tasks bound what runs at once.
+        max_active_runs=PROCESS_MAX_ACTIVE_RUNS,
         default_args=pp.DEFAULT_ARGS,
         tags=["ngt", "watch", "process", calibration],
         user_defined_macros={"ngt_run_and_file": _run_and_file},

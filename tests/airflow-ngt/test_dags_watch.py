@@ -181,6 +181,8 @@ def test_process_dags_watch_their_per_calibration_file_asset(dagbag):
         assert dag.get_task("step4_upload").retries == 5
         # Harvests of the same Step 3 outputs share a job directory: never two at once.
         assert dag.get_task("step4_harvest").max_active_tis_per_dag == 1
+        # At max_active_runs, Airflow drops the asset events that arrive while it waits.
+        assert dag.max_active_runs == watch.PROCESS_MAX_ACTIVE_RUNS >= 1000
 
 
 def test_no_cron_dag_in_this_design(dagbag):

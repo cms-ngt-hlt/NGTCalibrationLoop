@@ -256,6 +256,12 @@ The live test records which path was actually exercised.
   `poll_interval` apart, not instantly. Found live — before the fix, a poll that saw two new
   files at once processed one and permanently lost the other (and then looped forever on it,
   never writing `runEnd.log`).
+- **The process DAGs never reach `max_active_runs` (mandatory: 1000).** At its limit an
+  asset-triggered DAG is deferred, and when it's next due Airflow 3.3.1 creates one run for the
+  events up to its queue entry's time, then deletes the entry: events that came during the deferral
+  are never consumed. Found live on daq-dev (2026-11-15): 14 real files, one per lumisection, kept
+  10 runs open (their harvests run one at a time), and the last 3 files got no run. The scheduler's
+  `parallelism` and each DAG's `max_active_tasks` bound what runs at once instead.
 - **Triggerer-restart re-yield window.** A watcher trigger restarts after each yield (or on
   triggerer restart). Between a file being yielded and `ngt_watch_process_<cal>`'s `step2_express`
   appending it to `allLSProcessed.log`, a restarted file watcher could re-yield it — and unlike
