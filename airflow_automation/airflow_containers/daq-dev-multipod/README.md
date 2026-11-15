@@ -151,6 +151,12 @@ fake `uploadConditions.py`, which records the real payload and sends it nowhere.
 >   IOV since 403634. From the run's start to `PASSED`, 9 minutes.
 > - **Again on 3.3.1-6,** after an upgrade: `PASSED`, with the step pods at 4 CPUs as fast as at 8. Step 3 now deletes
 >   its 600 MB `EcalTestPulsesRaw.root`, as its `cleanup_command` says.
+> - **One file per lumisection,** below: the short scenario `PASSED` on 3.3.1-7, 9 minutes from the run's start. The 14
+>   files `PASSED` on 3.3.1-8, in 23 minutes: 14 DAG runs, the harvests one at a time, and 11 uploads, the last seven
+>   over all 14. Steps 2 and 3 took 83 to 102 s and 60 to 83 s a file, a harvest about 65 s. The tenant's quota refused
+>   seven step pods at an 8Gi limit, whose tasks waited 2 minutes for a retry. Again at 6Gi: `PASSED` in 22 minutes,
+>   with 11 uploads. The quota refused one pod, on CPU, and one step's Frontier check timed out: both passed at their
+>   retry. On these files a step pod used at most 1.4 cores and 928Mi.
 > - **The install:** the six pods came up with no restarts, Postgres on a worker and the other five on one `rubu` node.
 >   They had none after the play either.
 > - **The policy report:** one failure that step 3 doesn't list, the scheduler's API token. The step pods have three of
@@ -206,11 +212,15 @@ done
 ```
 
 Play them as above, with a reset between plays (step 5): they're all run 403634. Each file gets its own steps, as many
-at once as the scheduler runs tasks, and one harvest at a time over what Step 3 has made so far. The run's calibration
-events reach different crystals in different lumisections, and no EB crystal in the first four. So the 14 files' early
-harvests write no payload, and the last ones do, over all 14. The short one sets the harvester's threshold to -1, for a
-payload whatever the statistics: expect `PASSED` about 9 minutes after the run starts, the payload uploaded once per
-later harvest.
+at once as the scheduler runs tasks, and one harvest at a time over what step 3 has made so far.
+- **The 14 files:** the run's calibration events reach different crystals in different lumisections, and no EB crystal
+  in the first four. So the first harvests write no payload. On 2026-11-15 the first came from 10 files, LS 1257 and
+  1258 among them. Once the run has ended, each harvest still to come is the run's final one again, over all 14, and
+  uploads it once more. Expect `PASSED` about 23 minutes after the run starts, after 11 uploads.
+- **The short one** sets the harvester's threshold to -1, for a payload whatever the statistics: expect `PASSED` about 9
+  minutes after the run starts, the payload uploaded once per later harvest.
+- **A harvest without a payload** exits 99, and its task is skipped. Its pod stays, `Error`, as KubernetesPodOperator
+  deletes only the pods that succeed: `kubectl -n $NS delete pod -l app=ngt-airflow-step` once the play is over.
 
 **The step pods' policies:** while each exists, Kyverno fails three policies on it. `disallow-host-path` and
 `limit-hostpath-vols` are for the release's `hostPath`, and `prevent-bare-pods` is because KubernetesPodOperator starts
@@ -241,7 +251,7 @@ need an exception for the scheduler from the sysadmins.
 | A step pod's events: `hostPath type check failed: /opt/offline-el8` | That node has no el8 install | Take it out of `values-cmssw.yaml`'s list |
 | A step task fails with `JobScriptFailedError` | `cmsRun` failed | Its log is in the run's directory: `kubectl -n $NS exec deploy/ngt-airflow-tools -- sh -c 'tail -50 $NGT_DEV_HOME/data/*/run*/*.log'` |
 | The upload refuses an empty payload | The harvester saw too few channels: the whole run fills 16.5% of EB's, its first 4 lumisections none | The scenarios lower `threshChannelsAnalyzed`: 0.1 for the whole run, -1 for a part of it |
-| A step task fails at once: `admission webhook ... denied the request: resource exceeds GlobalResourceQuota` | The tenant's CPU, all its namespaces' together, is taken | It's retried after 2 minutes. If it keeps happening: fewer CPUs per step pod in `values-cmssw.yaml`, or what the tenant's other namespaces hold (`kubectl describe resourcequota`) |
+| A step task fails at once: `admission webhook ... denied the request: resource exceeds GlobalResourceQuota` | The tenant's CPU requests or memory limits, all its namespaces' together, are taken. It still counts the pods that just finished | It's retried after 2 minutes. If it keeps happening: smaller step pods in `values-cmssw.yaml`, or less in the tenant's other namespaces (`kubectl describe resourcequota` sums them) |
 | Step tasks stay `running` after their pods finished, and the scheduler restarted, `OOMKilled` | Too little memory: each step task follows its pod from in there | `values-step-pods.yaml` gives it 3Gi. The dead tasks fail after 5 minutes, and their retries find the work done and skip the file's later steps: reset and play again |
 | A file of the run never gets a DAG run | The process DAG was at `max_active_runs`: Airflow then drops the events that come meanwhile | The images since 3.3.1-8 set it to 1000 |
 | `upload_input.sh`: `command terminated with exit code 137` | A `helm upgrade` replaced the tools pod under the upload | Run it again: it resumes |
