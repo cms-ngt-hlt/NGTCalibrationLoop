@@ -137,8 +137,9 @@ runs steps 2, 3 and 4's harvest in CMSSW pods ([steps in pods of their own](../R
 - **The library from the data volume:** the scheduler's setup copies it to `/ngt-data/lib`. The pods run it with the
   release's Python, after `cmsenv`: the image's own is 3.6.
 - **Airflow's user,** so that the pods and the scheduler can write in the same runs' directories.
-- **3 CPUs per pod,** with no CPU limit, as `forbid-cpu-limits` asks, so that step 2's 8 threads can use more. Eight
-  pods, as many as the scheduler runs tasks at once, fit the tenant's quota: at 4, it refused some.
+- **3 CPUs per pod,** with no CPU limit, as `forbid-cpu-limits` asks, so that step 2's 8 threads can use more, and
+  4Gi with a 6Gi limit, twice what the steps were seen to use. Eight pods, as many as the scheduler runs tasks at once,
+  fit the tenant's quota, summed over its namespaces: at 4 CPUs, or an 8Gi limit, it refused some.
 - **A 20Gi data volume,** for the input files and each run's outputs.
 
 OMS, EOS and the upload stay fake. EOS is a directory the real file is linked into. The scheduler runs the upload with the
