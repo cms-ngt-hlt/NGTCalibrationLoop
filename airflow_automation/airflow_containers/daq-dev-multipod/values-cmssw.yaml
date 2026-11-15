@@ -33,11 +33,12 @@ stepPods:
     - {name: HOME, value: /tmp/home}
     # On the data volume: an emptyDir has to stay under 400Mi here.
     - {name: TMPDIR, value: /ngt-data/tmp}
-  # Step 2 runs with 8 threads, but kept about 2.7 cores busy on the whole file. With 4 each, as many pods as the scheduler
-  # runs tasks at once (parallelism, 8) fit what the tenant's 48 CPUs leave. No CPU limit, as forbid-cpu-limits asks, so
-  # a pod can still use 8. At most 2.9 GiB measured.
+  # Step 2 runs with 8 threads, but kept about 2.7 cores busy on the whole file, and less on one lumisection's. With 3
+  # each, as many pods as the scheduler runs tasks at once (parallelism, 8) fit what the tenant's 48 CPUs leave: at 4,
+  # its quota refused some (2026-11-15). No CPU limit, as forbid-cpu-limits asks, so a pod can still use 8. At most
+  # 2.9 GiB measured.
   resources:
-    requests: {cpu: "4", memory: 4Gi}
+    requests: {cpu: "3", memory: 4Gi}
     limits: {cpu: null, memory: 8Gi}
   # The el8 install, made under /opt/offline and only working there, from the nodes that have it: rubu nodes, as
   # NFS needs (values.yaml), but not all of them.
