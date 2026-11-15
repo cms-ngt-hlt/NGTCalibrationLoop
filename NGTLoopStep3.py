@@ -241,7 +241,8 @@ class NGTLoopStep3:
 
         Creates a numbered subdirectory under the working directory, writes a
         self-contained bash script that runs cmsDriver, appends any extra python
-        config modifications, and deletes the step-2 input files on success.
+        config modifications, and on success deletes the step-2 input files and
+        runs the calibration's cleanup_command.
         """
         print("I am in PrepareAlCaPromptjobs...")
         logging.info("I am in PrepareAlCaPromptjobs...")
@@ -282,6 +283,11 @@ class NGTLoopStep3:
             python_config_mods = f"cat <<@EOF>> {python_filename}\n{mods}\n@EOF\n"
 
         rm_express_files = "\n".join(f"  rm {p}" for p in self.setOfInputFiles)
+        # What the job leaves that nothing reads, such as EcalPedestals' 600 MB EcalTestPulsesRaw.root. A failure
+        # there only goes in the log: by then the job's inputs are gone.
+        cleanup = conf.get("cleanup_command", "").strip()
+        if cleanup:
+            cleanup = f"  {{\n{cleanup}\n  }} || echo 'cleanup_command failed' >> {logFileName}"
 
         with alcaJobFile.open("w") as f:
             f.write(
@@ -302,6 +308,7 @@ if cmsRun {python_filename} > {logFileName} 2>&1; then
   touch {witness_file}
   # Step 3 succeeded, now deleting Step 2 input files
 {rm_express_files}
+{cleanup}
 else
   echo 'cmsRun failed' >> {logFileName}
   exit 1

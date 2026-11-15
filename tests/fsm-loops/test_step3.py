@@ -7,10 +7,13 @@ real (tmp_path) filesystem, so only subprocess.Popen needs mocking -- see
 conftest.py's `popen_calls` fixture.
 """
 
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from support import stand_in_cmssw
 
 import NGTLoopStep3
 from conftest import _run_dir
@@ -279,3 +282,30 @@ def test_cleanup_writes_summary_log_and_marks_run_processed_when_final(loop, pop
 
     assert loop.state == "NotRunning"
     assert "run398600" in loop.setOfRunsProcessed
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs ALCAOUTPUT.sh with bash")
+@pytest.mark.parametrize(
+    "cms_run, succeeds, left",
+    [
+        ("touch EcalTestPulsesRaw.root", True, False),
+        (f"touch EcalTestPulsesRaw.root; {stand_in_cmssw.FAILS}", False, True),
+    ],
+    ids=["after-a-success", "not-after-a-failure"],
+)
+def test_the_job_runs_its_calibrations_cleanup_command(loop, tmp_path, monkeypatch, cms_run, succeeds, left):
+    """ALCAOUTPUT.sh, run with bash under a stand-in CMSSW. EcalPedestals' cleanup_command deletes the 600 MB
+    EcalTestPulsesRaw.root its job leaves, which nothing reads: no code used to run it."""
+    stand_in_cmssw.install(tmp_path / "bin", monkeypatch, cms_run)
+    run_dir = _run_dir(loop, 398600)
+    (run_dir / "CMSSW_16_0_7_patch1" / "src").mkdir(parents=True)  # where Step 2's cmsrel puts the release
+    loop.TryLookForRun()
+    _seed_step2_output(run_dir, "run398600_LS0051To0051")
+    loop.TryProcessFiles()
+    loop.ContinueAfterCheckFiles()
+    loop.TryPrepareALCAPROMPTJobs()
+
+    job_dir = Path(loop.jobDir)
+    result = subprocess.run(["bash", "ALCAOUTPUT.sh"], cwd=job_dir, capture_output=True, text=True, check=False)
+    assert (result.returncode == 0) == succeeds, result.stderr
+    assert (job_dir / "EcalTestPulsesRaw.root").exists() == left
